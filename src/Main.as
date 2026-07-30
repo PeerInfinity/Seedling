@@ -47,7 +47,8 @@ package
 			
 			Music.begin();
 			
-			FP.world = new Splash();// Game(level, playerPositionX, playerPositionY);// Splash();
+			Game.menu = false;  // TELEPORT: skip title/"press any key" -> straight into play
+			FP.world = new Game(0, 80, 128);// TELEPORT: skip splashes -> OverWorld1 @ start. Was: new Splash();
 			
 			FP.screen.color = 0x000000;
 			FP.screen.scale = 3;
