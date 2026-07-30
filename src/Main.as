@@ -60,6 +60,11 @@ package
 		
 		override public function update():void
 		{
+			// BOT: drive the tape before entities update. This must stay
+			// ABOVE super.update() — Input.update() clears the edge queues
+			// at the end of the previous frame, so an event dispatched here
+			// is live for exactly this frame and self-clears.
+			Bot.update();
 			super.update();
 			Music.update();
 			

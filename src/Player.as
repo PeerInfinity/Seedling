@@ -1694,7 +1694,7 @@ package
 				{
 					c_s = null;// shieldObj.collideTypes(enemies, shieldObj.x + d, shieldObj.y);
 				}
-				var c:Entity = collideTypes(solids, x + d, y);
+				var c:Entity = Bot.noclip ? null : collideTypes(solids, x + d, y);
 				if (!c && (!c_s || hitsTimer > 0))
 				{
 					x += d;
@@ -1724,7 +1724,7 @@ package
 				{
 					c_s = null;// shieldObj.collideTypes(enemies, shieldObj.x, shieldObj.y + d);
 				}
-				var c:Entity = collideTypes(solids, x, y + d);
+				var c:Entity = Bot.noclip ? null : collideTypes(solids, x, y + d);
 				if (!c && (!c_s || hitsTimer > 0))
 				{
 					y += d;
