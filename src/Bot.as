@@ -290,9 +290,24 @@ package
 
 				if (version == 1)
 				{
-					if (t.noDamage != null || t.noHazards != null || t.grants != null)
-						return "error:tape_version 1 must not declare noDamage, "
-							+ "noHazards or grants";
+					// ⚠ The test is on the VALUE, not on presence, and the two
+					// are NOT interchangeable. `parseTape` on the JS side is
+					// idempotent by design — every consumer re-validates, so a
+					// parsed tape carries the three fields NORMALISED to
+					// version 1's own semantics — and the harness sends that
+					// parsed object over the wire. A presence check here
+					// therefore rejects all eleven committed v1 fixtures,
+					// which is exactly what it did on the first build of this
+					// batch: two consumers reading the same tape differently,
+					// the one failure this format exists to prevent.
+					if (t.noDamage != null && t.noDamage != false)
+						return "error:tape_version 1 means noDamage: false BY DEFINITION";
+					if (t.noHazards != null && (t.noHazards as Array) != null
+						&& (t.noHazards as Array).length > 0)
+						return "error:tape_version 1 means noHazards: [] BY DEFINITION";
+					if (t.grants != null && (t.grants as Array) != null
+						&& (t.grants as Array).length > 0)
+						return "error:tape_version 1 means grants: [] BY DEFINITION";
 				}
 				else
 				{
