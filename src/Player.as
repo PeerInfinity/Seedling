@@ -520,7 +520,10 @@ package
 				}
 				else
 				{
-					moveSpeed = moveSpeeds[state];
+					// ⚠ The site a "guard the setter" patch misses: this runs
+					// every tick and would otherwise re-apply the RAW hazard
+					// speed the setter had just neutralised.
+					moveSpeed = moveSpeeds[Bot.coerceState(state)];
 					if (inWater || inLava)
 					{
 						f = WATER_FRICTION;
@@ -684,23 +687,29 @@ package
 		
 		public function set state(_s:int):void
 		{
+			// R0: `Bot.noHazards`. The EFFECTS below read the coerced value;
+			// `_state` keeps the RAW one, so the change gate, `lastState` and
+			// the splash comparison in getState() are byte-identical whether
+			// the flags are on or off. Both sides of the differential apply
+			// exactly this rule (see tapeFormat.coerceTerrainState).
+			var eff:int = Bot.coerceState(_s);
 			if (_s != _state)
 			{
 				lastState = _state;
 				var tile:Tile = FP.world.nearestToPoint("Tile", prev.x, prev.y + checkOffsetY) as Tile;
 				if (onGround)
 				{
-					if (_s == 6 /* Pit */)
+					if (eff == 6 /* Pit */)
 					{
 						var tile_test:Tile = FP.world.nearestToPoint("Tile", x, y + checkOffsetY) as Tile;
 						fallInPitPos = new Point(tile_test.x, tile_test.y);
 						fallInPit = true;
 						Music.playSound("Player Fall");
 					}
-					onIce = _s == 22; /* Ice */
-					onWaterfall = _s == 25; /* Waterfall */
-					inWater = _s == 1 || _s == 25; /* Water */
-					inLava = _s == 17;
+					onIce = eff == 22; /* Ice */
+					onWaterfall = eff == 25; /* Waterfall */
+					inWater = eff == 1 || eff == 25; /* Water */
+					inLava = eff == 17;
 				}
 				else
 				{
@@ -712,7 +721,7 @@ package
 				lastPosition = new Point(tile.x, tile.y);
 			}
 			_state = _s;
-			moveSpeed = moveSpeeds[state];
+			moveSpeed = moveSpeeds[eff];
 		}
 		
 		public function checkFallingInPit():void
@@ -1344,6 +1353,12 @@ package
 		
 		public function hit(e:Enemy=null, f:Number=0, p:Point=null, d:Number=1):void
 		{
+			// R0: `Bot.noDamage`. Guards the BODY, so no sound, no shake, no
+			// hits, no knockback and no die() — the whole damage path in one
+			// place. `knockback()` itself is deliberately NOT guarded: its
+			// only other caller is the sword dash at :761, which is an item
+			// USE rather than contact and belongs to R3.
+			if (Bot.noDamage) return;
 			if (hitsTimer <= 0 && hits < hitsMax && !Game.freezeObjects)
 			{
 				if (e && hasDarkSuit)
@@ -1417,11 +1432,12 @@ package
 			else
 			{
 				var v:int = 0;
-				if (state == 1 && !canSwim /*Water*/)
+				var eff:int = Bot.coerceState(state);
+				if (eff == 1 && !canSwim /*Water*/)
 				{
 					v = 1;
 				}
-				else if (state == 17 && !hasDarkSuit /*Lava*/)
+				else if (eff == 17 && !hasDarkSuit /*Lava*/)
 				{
 					v = 2;
 				}
