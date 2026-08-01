@@ -3,6 +3,7 @@ package
 	import flash.events.KeyboardEvent;
 	import flash.external.ExternalInterface;
 	import net.flashpunk.FP;
+	import NPCs.Help;
 
 	/**
 	 * Bot — a generic, data-driven INPUT TAPE INTERPRETER compiled into the
@@ -228,6 +229,19 @@ package
 		private static const AUTO_ADVANCE_CADENCE:int = 8;
 		private static var autoAdvancePhase:int = 0;
 		private static var sawAutoAdvance:int = 0;
+		/**
+		 * A KEY_DOWN `autoAdvance` dispatched and has not released yet.
+		 *
+		 * ⚠ R3: without this, a freeze dismissed by the PRESS strands the
+		 * key down for the rest of the run. The cadence releases on phase 1,
+		 * which is balanced for an `NPC` — there the RELEASE is the edge
+		 * that ends the freeze, so phase 1 always happens. A `Help` reads
+		 * `Input.pressed`, so the freeze ends on phase 0; the next frame is
+		 * live, the phase resets, and the KEY_UP is never sent. FlashPunk's
+		 * `_key[code]` stays true until one arrives, so X would read as held
+		 * from then on — and X is `useItem(Main.primary)`.
+		 */
+		private static var autoAdvanceHeld:Boolean = false;
 
 		private static function keyCodeFor(name:String):int
 		{
@@ -583,6 +597,7 @@ package
 			sawInputRefused = false;
 			deadFrames = 0;
 			autoAdvancePhase = 0;
+			autoAdvanceHeld = false;
 			sawAutoAdvance = 0;
 			grantsFired = new Array();
 			clearObservations();
@@ -632,6 +647,50 @@ package
 			return out;
 		}
 
+		/**
+		 * EVERY persistence flag the run has turned off, whoever turned it
+		 * off — the full audit surface, not the tape's own echo.
+		 *
+		 * ── Why R3 needs this and no earlier rung did ────────────────────
+		 * `persistenceReadout()` above answers "did my declared clears
+		 * apply", which is the right question while a clear is the only way
+		 * a flag ever goes false. R3 retires that crutch, so the flags now
+		 * go false because the PLAYER did something: `Sword.removed()` calls
+		 * `Game.setPersistence(tag, false)`, so does every other pickup, and
+		 * so does `Lock.turnOff()` when a shield lock finishes its fade. The
+		 * ledger claim — "collected for real, not granted" — is exactly the
+		 * difference between those two lists.
+		 *
+		 * ⚠ DERIVED FROM THE ARRAY, NOT FROM A DECLARED LIST, deliberately.
+		 * A readout that took (level, tag) pairs from the tape could only
+		 * ever confirm what the tape already believed; scanning the whole
+		 * array reports flags nobody asked about, which is the only way a
+		 * clear reaching further than intended shows up. `Main.begin` fills
+		 * the array with `true` on a fresh boot, so on a fresh run this list
+		 * is precisely what the run changed — and at R3 that is about a
+		 * dozen entries.
+		 *
+		 * It also needs no tape field and therefore no version bump: the R0
+		 * value-vs-presence lesson is that every new tape field is a place
+		 * for two consumers to disagree, and this one buys the same evidence
+		 * for none of that risk.
+		 */
+		private static function persistenceClearedAll():Array
+		{
+			var out:Array = new Array();
+			for (var lv:int = 0; lv < Game.levels.length; lv++)
+			{
+				for (var tg:int = 0; tg < Game.tagsPerLevel; tg++)
+				{
+					if (!Main.levelPersistence(lv, tg))
+					{
+						out.push({ level: lv, tag: tg });
+					}
+				}
+			}
+			return out;
+		}
+
 		public static function botStatus():String
 		{
 			var p:Player = findPlayer();
@@ -671,6 +730,11 @@ package
 				// that the tape was parsed; this confirms the flag is false
 				// where the tape said, in the game's own state.
 				persistence: persistenceReadout(),
+				// R3: every flag currently off, whoever turned it off. The
+				// crutch ledger is the difference between this and the line
+				// above — a flag here but not there was cleared by the
+				// PLAYER, which is what "collected for real" means.
+				persistence_cleared: persistenceClearedAll(),
 				saw_auto_advance: sawAutoAdvance
 			};
 			return JSON.stringify(o);
@@ -825,6 +889,7 @@ package
 			sawInputRefused = false;
 			deadFrames = 0;
 			autoAdvancePhase = 0;
+			autoAdvanceHeld = false;
 			sawAutoAdvance = 0;
 			clearObservations();
 			return "ok";
@@ -863,6 +928,15 @@ package
 				deadFrames++;
 				autoAdvance();
 				return;
+			}
+			// The first LIVE frame after an auto-advance press. Release
+			// before anything else this frame, so the edge lands before
+			// `Player.input()` reads `Input.pressed`/`Input.check` and the
+			// key cannot be seen as held into the tape's own spans.
+			if (autoAdvanceHeld)
+			{
+				dispatchKey(KEY_PRIMARY, false);
+				autoAdvanceHeld = false;
 			}
 			autoAdvancePhase = 0;
 
@@ -934,15 +1008,49 @@ package
 		 * `Key.X`, the one the comment labels "Talk". V is index 7 and opens
 		 * the inventory, which would freeze the game rather than unfreeze it.
 		 *
-		 * R0's routes avoid every ceremony, so this ships DARK. It exists for
-		 * R3 (real collection) and as the named safety if a census miss ever
-		 * lets one fire — `saw_auto_advance` in `botStatus` is how a run that
-		 * needed it says so, rather than quietly succeeding for a reason
-		 * nobody asked for.
+		 * R0's routes avoid every ceremony, so this shipped DARK.
+		 *
+		 * ── R3 MEASURED WHAT IT IS ACTUALLY FOR, and it is not dialogue ──
+		 *
+		 * The R3 ceremony probe walked onto a real pickup and found that the
+		 * bot KEEPS TICKING through the dialogue phase: `Game.freezeObjects`
+		 * is a sticky static with several writers and no per-frame reset, so
+		 * it is TRUE when `Mobile.mobileUpdate` reads it and FALSE again by
+		 * the time the next frame's dead-frame gate does. The player cannot
+		 * move, but the tape advances — and `NPC.talk()` runs in the NPC's
+		 * own update, OUTSIDE the frozen block. So **the tape dismisses its
+		 * own dialogues**, with a `primary` span like any other input, and
+		 * that is where the behaviour belongs (tapes and JS, never AS3).
+		 *
+		 * What no tape can EVER reach is a `Help`. `Sword.removed()` adds
+		 * one (`Help(3)`, the attack tutorial) and it is NOT gated by
+		 * `Inventory.help` — only `Inventory.as:158`'s own popup is, so R1's
+		 * line does not cover it. A `Help` is the sole writer of the freeze
+		 * flag while it is up, so the gate behaves CORRECTLY, the tick
+		 * counter stops, and no span can ever be dispatched again. Measured:
+		 * the probe collected the sword and then pinned at tick 62 with
+		 * `dead_frames` climbing without bound.
+		 *
+		 * Hence the division this rung settles on, and the gate below:
+		 * **the tape drives every dialogue; `autoAdvance` handles only the
+		 * freeze no tape can reach.** `saw_auto_advance` stays a meaningful
+		 * signal rather than becoming background noise — non-zero means a
+		 * `Help` fired, which at R3 is exactly once, for the sword.
+		 *
+		 * ⚠ A `Help` is dismissed by `Input.pressed`, not `Input.released`
+		 * (`Help.update` reads `pressed` over its own key list, which for
+		 * frame 3 is [X, C]). So the freeze ends on phase 0 and the release
+		 * has to be carried into the next live frame — see
+		 * `autoAdvanceHeld`.
 		 */
 		private static function autoAdvance():void
 		{
-			if (!Game.talking)
+			// ⚠ `classFirst` on a world that is mid-load can be null; the
+			// blackCover arm of the caller covers those frames, but the
+			// world reference is re-read here rather than assumed.
+			var helpUp:Boolean = FP.world != null
+				&& FP.world.classFirst(Help) != null;
+			if (!Game.talking && !helpUp)
 			{
 				autoAdvancePhase = 0;
 				return;
@@ -951,10 +1059,12 @@ package
 			if (phase == 0)
 			{
 				dispatchKey(KEY_PRIMARY, true);
+				autoAdvanceHeld = true;
 			}
 			else if (phase == 1)
 			{
 				dispatchKey(KEY_PRIMARY, false);
+				autoAdvanceHeld = false;
 				sawAutoAdvance++;
 			}
 			autoAdvancePhase++;
