@@ -186,6 +186,30 @@ package
 		private static var grantsFired:Array = new Array();
 
 		/**
+		 * R2, tape version 3: PERSISTENCE CLEARS.
+		 *
+		 * Parallel arrays, one row per {level, tag}. Applied by `botStart`
+		 * BEFORE the first world is built, because every class that responds
+		 * to a cleared flag reads it in its CONSTRUCTOR or in the `check()`
+		 * the new world runs on its first frame — apply them after and the
+		 * blocker is already there.
+		 *
+		 * Clears ONLY. There is no way to set a flag true from a tape, which
+		 * is deliberate: persistence is a shared, cross-level, endgame
+		 * load-bearing namespace (`FinalDoor` reads level 114's tag 0;
+		 * `Moonrock` writes level 2's from level 0), and a crutch that could
+		 * write either way could forge an ending.
+		 *
+		 * ⚠ This is the SAME state the game itself reaches: `Lock.turnOff()`
+		 * runs `Game.setPersistence(tag, false)` when a lock opens. The
+		 * crutch does not invent a state, it skips the puzzle that produces
+		 * one — which is why R3 retires it class by class as real item use
+		 * lands, rather than having to undo anything.
+		 */
+		private static var persistLevel:Array = new Array();
+		private static var persistTag:Array = new Array();
+
+		/**
 		 * Dialogue auto-advance, counted in DEAD frames.
 		 *
 		 * ⚠ The key is `primary` (X, 88), NOT V. `NPC.talk()` dismisses on
@@ -263,8 +287,8 @@ package
 				var t:Object = JSON.parse(json);
 
 				var version:int = int(t.tape_version);
-				if (version != 1 && version != 2)
-					return "error:tape_version must be 1 or 2, got " + t.tape_version;
+				if (version != 1 && version != 2 && version != 3)
+					return "error:tape_version must be 1, 2 or 3, got " + t.tape_version;
 				if (t.game != "seedling")
 					return "error:game must be seedling, got " + t.game;
 				if (!(t.noclip is Boolean))
@@ -286,6 +310,8 @@ package
 				var relaxWaterfall:Boolean = false;
 				var newGrantLevel:Array = new Array();
 				var newGrantItems:Array = new Array();
+				var newPersistLevel:Array = new Array();
+				var newPersistTag:Array = new Array();
 				var j:int;
 
 				if (version == 1)
@@ -349,6 +375,55 @@ package
 					}
 				}
 
+				// ── the version 3 field: persistence clears ───────────────
+				// ⚠ THE CHECK IS ON THE VALUE, NOT ON PRESENCE, for exactly
+				// the reason the version-1 arm above spells out: `parseTape`
+				// is idempotent and NORMALISES, so a parsed v1 or v2 tape
+				// arrives over the wire carrying `persistence: []`. A
+				// presence check here would reject every committed fixture —
+				// which is precisely what the first build of the R0 batch did
+				// with `noDamage`, and the reason that comment exists.
+				if (version < 3)
+				{
+					if (t.persistence != null && (t.persistence as Array) != null
+						&& (t.persistence as Array).length > 0)
+						return "error:tape_version " + version
+							+ " means persistence: [] BY DEFINITION";
+				}
+				else
+				{
+					if (!(t.persistence is Array))
+						return "error:persistence must be an array on a version 3 tape";
+					var clears:Array = t.persistence as Array;
+					for (j = 0; j < clears.length; j++)
+					{
+						var c:Object = clears[j];
+						if (c == null)
+							return "error:persistence[" + j + "] must be {level, tag, note}";
+						var cl:int = int(c.level);
+						var ct:int = int(c.tag);
+						if (cl < 0 || cl >= Game.levels.length)
+							return "error:persistence[" + j + "].level " + cl
+								+ " is not a level";
+						// ⚠ A NEGATIVE TAG IS NOT "no tag" HERE. Entities use
+						// -1 to mean untagged and every persistence reader
+						// guards on `tag >= 0`, so a clear for -1 could never
+						// despawn anything — it would be a line in the audit
+						// list that does nothing, which is worse than absent.
+						if (ct < 0 || ct >= Game.tagsPerLevel)
+							return "error:persistence[" + j + "].tag " + ct
+								+ " is out of range 0.." + (Game.tagsPerLevel - 1);
+						for (var d:int = 0; d < newPersistLevel.length; d++)
+						{
+							if (newPersistLevel[d] == cl && newPersistTag[d] == ct)
+								return "error:persistence[" + j + "] duplicates level "
+									+ cl + " tag " + ct;
+						}
+						newPersistLevel.push(cl);
+						newPersistTag.push(ct);
+					}
+				}
+
 				var codes:Array = new Array();
 				var froms:Array = new Array();
 				var tos:Array = new Array();
@@ -394,6 +469,8 @@ package
 				grantLevel = newGrantLevel;
 				grantItems = newGrantItems;
 				grantsFired = new Array();
+				persistLevel = newPersistLevel;
+				persistTag = newPersistTag;
 
 				loaded = true;
 				armed = false;
@@ -463,6 +540,38 @@ package
 			// Byte-inert for every pre-R1 fixture: none of them grants two
 			// weapon-shaped items, and none grants conch or feather.
 			Inventory.help = false;
+			// ── R2: the persistence clears, BEFORE the world is built ─────
+			//
+			// Every class that responds to a cleared flag reads it either in
+			// its CONSTRUCTOR (`FallRock`, `Watcher`, `Teleporter`) or in the
+			// `check()` that `Game.update` runs on a new world's first frame,
+			// above the blackCover gate. Applying a clear after the world
+			// exists would leave the blocker standing for this visit, which
+			// is the same "already too late to despawn" fact the R0 grants
+			// ruling turned on.
+			//
+			// ⚠ The RESET is gated on there being clears at all, so a v1 or
+			// v2 tape takes a byte-identical path to the one it took before
+			// this batch. It exists so that a v3 tape's state is a pure
+			// function of the tape rather than of whatever ran on the page
+			// before it: the harness uses a fresh page per tape, but "the
+			// feature is correct because the caller is careful" is how order
+			// dependence gets in.
+			if (persistLevel.length > 0)
+			{
+				var levelCount:int = Game.levels.length;
+				for (var li:int = 0; li < levelCount; li++)
+				{
+					for (var ti:int = 0; ti < Game.tagsPerLevel; ti++)
+					{
+						Main.levelPersistenceSet(li, ti, true);
+					}
+				}
+				for (var pi:int = 0; pi < persistLevel.length; pi++)
+				{
+					Game.setPersistence(persistTag[pi], false, persistLevel[pi]);
+				}
+			}
 			if (bootLevel != Main.level || !atBootPosition())
 			{
 				FP.world = new Game(bootLevel, bootX, bootY);
@@ -501,6 +610,28 @@ package
 		 * pit falls and boss sequences, and a bot that just sat there would
 		 * be indistinguishable from one making slow progress.
 		 */
+		/**
+		 * Each declared clear, as the GAME now holds it.
+		 *
+		 * `cleared` is `!Main.levelPersistence(level, tag)` — read back, not
+		 * remembered. A readout that echoed `persistLevel`/`persistTag`
+		 * would go on saying "applied" if `botStart` never ran, which is the
+		 * one failure an audit surface exists to catch.
+		 */
+		private static function persistenceReadout():Array
+		{
+			var out:Array = new Array();
+			for (var i:int = 0; i < persistLevel.length; i++)
+			{
+				out.push({
+					level: persistLevel[i],
+					tag: persistTag[i],
+					cleared: !Main.levelPersistence(persistLevel[i], persistTag[i])
+				});
+			}
+			return out;
+		}
+
 		public static function botStatus():String
 		{
 			var p:Player = findPlayer();
@@ -534,6 +665,12 @@ package
 				cutscene: Game.cutscene,
 				menu: Game.menu,
 				grants: grantsFired,
+				// R2: the clears this run applied, read back from the GAME's
+				// own persistence array rather than echoed from the tape. An
+				// audit surface that repeated its input would confirm only
+				// that the tape was parsed; this confirms the flag is false
+				// where the tape said, in the game's own state.
+				persistence: persistenceReadout(),
 				saw_auto_advance: sawAutoAdvance
 			};
 			return JSON.stringify(o);
