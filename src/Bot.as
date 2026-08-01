@@ -438,6 +438,31 @@ package
 		{
 			if (!loaded) return "error:no tape loaded";
 			if (armed) return "error:already running";
+			// ⚠ THE ONE CEREMONY NO TAPE CAN DISMISS.
+			//
+			// `Inventory.update` sets `firstUse` as soon as `items.length >=
+			// 2` (addItemsFromSave adds one entry each for sword/fire/wand/
+			// spear), and sets `extended` as soon as canSwim or hasFeather;
+			// BOTH setters raise a tutorial that holds `Game.freezeObjects`
+			// until a key is pressed. Frozen frames are DEAD frames, so the
+			// tape's tick counter skips them and no span in the tape can ever
+			// reach the release — and `autoAdvance` cannot help either,
+			// because it gates on `Game.talking` and a `Help` is not an NPC.
+			// A walk that collects two items therefore deadlocks forever,
+			// which is exactly what an R1 segment did: tick stuck at 2,
+			// dead_frames climbing, cutscene and menu both false.
+			//
+			// One boolean gates both ceremonies at their source
+			// (`if (!firstUse && _fu && help)`), and the GAME'S OWN debug
+			// warps set exactly this line for exactly this reason
+			// (Player.as:1875, :1897, :1919, :1941, :1963). It suppresses a
+			// UI tutorial and nothing else — no physics, no collision, no
+			// damage, no hazard — so it is not a crutch a later rung has to
+			// retire; R3's real collection needs it too.
+			//
+			// Byte-inert for every pre-R1 fixture: none of them grants two
+			// weapon-shaped items, and none grants conch or feather.
+			Inventory.help = false;
 			if (bootLevel != Main.level || !atBootPosition())
 			{
 				FP.world = new Game(bootLevel, bootX, bootY);
