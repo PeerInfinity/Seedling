@@ -1033,15 +1033,44 @@ package
 		 *
 		 * Hence the division this rung settles on, and the gate below:
 		 * **the tape drives every dialogue; `autoAdvance` handles only the
-		 * freeze no tape can reach.** `saw_auto_advance` stays a meaningful
-		 * signal rather than becoming background noise — non-zero means a
-		 * `Help` fired, which at R3 is exactly once, for the sword.
+		 * freeze no tape can reach.**
 		 *
 		 * ⚠ A `Help` is dismissed by `Input.pressed`, not `Input.released`
 		 * (`Help.update` reads `pressed` over its own key list, which for
 		 * frame 3 is [X, C]). So the freeze ends on phase 0 and the release
 		 * has to be carried into the next live frame — see
 		 * `autoAdvanceHeld`.
+		 *
+		 * ── ⛔ AND THAT GIVES `saw_auto_advance` A BLIND SPOT ────────────
+		 *
+		 * The counter increments on phase 1, the RELEASE. A `Help` ends its
+		 * freeze on phase 0, so the next frame is LIVE, the phase resets,
+		 * the carried release is drained by the live path — which does not
+		 * count — and **the counter never sees it.** The sword's `Help(3)`
+		 * is auto-advanced on every run that collects the sword and
+		 * `saw_auto_advance` still reports 0.
+		 *
+		 * ⚠ THE PREVIOUS VERSION OF THIS COMMENT CLAIMED THE OPPOSITE —
+		 * "non-zero means a `Help` fired, which at R3 is exactly once, for
+		 * the sword" — two lines above the paragraph that disproves it. Both
+		 * were written in the same batch and neither was checked against the
+		 * other. Recorded here rather than quietly deleted, because a
+		 * docblock that contradicts its own code two lines later is the
+		 * failure worth remembering.
+		 *
+		 * So the readout means "**no NPC dialogue was auto-advanced**", NOT
+		 * "no ceremony fired". That matters because `saw_auto_advance == 0`
+		 * is asserted on every fixture as a CENSUS GUARD — "a freeze fired
+		 * that nobody planned for" — and the whole `Help` class is currently
+		 * invisible to it. Nothing built on it is wrong (the JS model
+		 * reproduces every tape exactly, which is the real evidence), but
+		 * the guard has a hole in the shape of the thing the R3 batch added.
+		 *
+		 * THE FIX IS AS3 and therefore belongs to the NEXT BATCH, not to a
+		 * build of its own: count in `dispatchKey`'s phase-0 arm as well, or
+		 * count once per freeze rather than once per release. R3 closed
+		 * under a zero-further-AS3 rule, so this comment is the whole of the
+		 * change it was allowed to make.
 		 */
 		private static function autoAdvance():void
 		{
