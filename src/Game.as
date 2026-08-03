@@ -814,6 +814,11 @@ package
 			{
 				super.update();
 			}
+			// ── R5 THE DEAD-FRAME PIN, the UPDATE half ────────────────────
+			// Placed immediately after the gate that reads `blackCover`, so
+			// the decay lands at exactly the point in the frame `cover()`
+			// would have landed it. See `stepBlackCover` below.
+			if (Bot.pinDeadFrames) stepBlackCover();
 			view();
 			time += timeRate;
 			if (time % (dayLength + nightLength) == 0)
@@ -1723,6 +1728,53 @@ package
 					Draw.rect(FP.camera.x, FP.camera.y, FP.screen.width, FP.screen.height, 0x000000, blackCover);
 				}
 			}
+			// ── R5 THE DEAD-FRAME PIN, the RENDER half ────────────────────
+			// Vanilla decays here, in `cover()`, which `render()` calls. The
+			// pin moves the decay to `update()` and this arm stands down.
+			if (!Bot.pinDeadFrames) stepBlackCover();
+		}
+
+		/**
+		 * One step of the room-fade.
+		 *
+		 * CLASSIFICATION: **PIN** (kickoff §3.6 / §13 ruling 2). Gated on
+		 * `Bot.pinDeadFrames`, **OFF BY DEFAULT**.
+		 *
+		 * ── WHAT IT PINS ──────────────────────────────────────────────────
+		 * Vanilla decays `blackCover` from `cover()`, i.e. per RENDER, while
+		 * everything else in this game steps per UPDATE — and `Game.update`
+		 * skips `super.update()` entirely while `blackCover > 0`. So the
+		 * number of DEAD FRAMES a room load costs is the number of RENDERS
+		 * that fit inside twenty units of decay, which is not the same
+		 * quantity as the number of updates whenever the runtime's render
+		 * and update loops are not locked 1:1. Measured on this runtime at
+		 * R5 slice 0: 319/321/319/321/319 fade frames over 641 ticks and
+		 * 1677/1679/1679 over 10,052 — a **±2 band that does not scale**,
+		 * i.e. one bimodal event per walk rather than per-load jitter.
+		 *
+		 * Those two frames are not free. `Game.time` (= `Main.time`) advances
+		 * `timeRate` per UPDATE and the `Game.worldFrame`-coupled family —
+		 * `LavaChain`, and `BeamTower`'s POSITION bob — reads it, so k = 2
+		 * dead frames is k = 2 of hazard PHASE uncertainty carried across
+		 * every load. Decaying per update makes the fade a fixed count and
+		 * collapses that band to exact: **k -> 0**.
+		 *
+		 * It creates nothing the vanilla game cannot do — a run whose render
+		 * and update loops stay locked (the ordinary case, and what the
+		 * SWF's own 60 fps stage rate asks for) IS this execution. It changes
+		 * no live tick's physics: the decay's arithmetic is untouched, only
+		 * the loop it is driven from, and a frame on which `blackCover > 0`
+		 * runs no `super.update()` either way.
+		 *
+		 * ⚠ Its blast radius is smaller than §8.9 priced it. R5 slice 2 found
+		 * the beam tower's FIRING gate to be a Spritemap frame stepped from
+		 * `World.update` INSIDE the `blackCover <= 0` gate — exact in live
+		 * ticks already — so the genuinely `Game.time`-coupled family is ONE
+		 * class. The pin is in the batch because it is one line beside a pin
+		 * that had to happen anyway, not because a route was blocked.
+		 */
+		public function stepBlackCover():void
+		{
 			if (blackCoverRate > 0 && blackCover < 1)
 			{
 				blackCover = Math.min(blackCover + blackCoverRate, 1);

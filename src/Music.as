@@ -468,7 +468,195 @@ package
 		{
 			play(bkgdSong);
 		}
-		
+
+		// ══ R5: THE FRAME-CLOCKED SOUND PIN ════════════════════════════════
+		//
+		// CLASSIFICATION: **PIN** (kickoff §3.6 / §13 ruling 1). It selects
+		// WHICH vanilla-reachable execution you get — the one the game gives
+		// at a steady 60 fps, its own `Main.FPS` — and creates no
+		// vanilla-unreachable one. Every recording under it is still a
+		// real-game run, just a repeatable one. Gated on `Bot.pinSoundClock`,
+		// **OFF BY DEFAULT**, so the 57 frozen fixtures exercise the vanilla
+		// path and the byte-inertness gate means something.
+		//
+		// ── WHY IT EXISTS ─────────────────────────────────────────────────
+		// `Player.as:530` is
+		//     moveSpeed = moveSpeeds[state] + 0.25 * int(Music.soundPosition("Swim") < 0.1)
+		// and `soundPosition` bottoms out at `SoundChannel.position` — the
+		// live Web Audio mixer clock, in REAL MILLISECONDS. So the NUMBER OF
+		// TICKS that get the +0.25 swim boost is a function of the frame rate
+		// the browser happened to achieve. The R5 slice-2 probe measured it:
+		// the identical tape at 0.4 fps and at 10.1 fps DIVERGED at tick 52,
+		// four ticks after the water edge, with the slow run ahead — the
+		// milliseconds-against-frames signature exactly. Any `inWater` or
+		// `inLava` span is not reproducible across frame rates, and no amount
+		// of care closes it, which is why the batch opened for this one term.
+		//
+		// ── WHAT THE PIN REPRODUCES ───────────────────────────────────────
+		// One frame-step per UPDATE. `Bot.update()` runs at the top of
+		// `Main.update()`, once per engine frame, before `World.update()`
+		// reaches `Player.update` — the same place a real mixer's advance
+		// lands relative to the read. So a sound played on frame F reads
+		// position 1/FPS on frame F+1, 2/FPS on F+2, exactly as a 60 fps
+		// mixer would. `< 0.1` s is then frames 0..5: six boosted ticks per
+		// play, at any wall-clock rate.
+		//
+		// ── AND THE PLAY/COMPLETE CYCLE IS PINNED TOO, DELIBERATELY ───────
+		// ⚠ Pinning only the POSITION would not have worked. The swim block's
+		// second line is `if (v.length > 0 && !Music.soundIsPlaying("Swim"))
+		// Music.playSound("Swim")` — so once the sound COMPLETES the game
+		// replays it and the boost recurs. Vanilla completion is
+		// `SOUND_COMPLETE` off the same mixer clock, so a position-only pin
+		// would have left the RECURRENCE frame-rate-dependent and the swim
+		// still inexact past `swim.mp3`'s own length. The pinned mixer
+		// therefore models the whole `Sfx` channel life:
+		//
+		//   play      pos = 0, open
+		//   step      if open: pos++;  if pos >= len: close, pos = 0
+		//             (`Sfx.onComplete` nulls the channel and zeroes
+		//              `_position` — a completed sound reads 0, not its end)
+		//   stop      close, pos KEPT
+		//             (`Sfx.stop` writes `_position = _channel.position`, so
+		//              a stopped sound reports where it stopped)
+		//
+		// ⚠ It is UNIFORM over every sound set, not scoped to "Swim". A
+		// whitelist would be a patch aimed at one call site; and the
+		// recompiled runtime's `Math.random()` is ONE GLOBAL LFSR STREAM
+		// which `playSound`'s index draw advances, so leaving the other sets
+		// on the wall clock would have left that stream — and therefore every
+		// downstream RNG-derived value — frame-rate-dependent. Pinning all of
+		// them is what makes the run repeatable rather than just the swim.
+		// The three other readers (`Game.as:1133` "Wind", `Game.as:1646`
+		// "Text", `Scenery/Grass.as:31` "Arrow", `Puzzlements/Crusher.as:77`
+		// "Other") gate SOUND PLAYBACK only — no physics reads them.
+		//
+		// ⚠ A ZERO LENGTH IS A NAMED FAULT, NEVER A FALLBACK. `Sfx.length` is
+		// `Sound.length / 1000`; if the recompiled runtime does not answer it
+		// the pinned channel would complete on its first step and replay
+		// every frame — a vanilla-UNREACHABLE execution, i.e. the pin
+		// breaking its own doctrine silently. `Bot.pinFault` disarms the tape
+		// and names it instead. `sound_pin` in `botStatus` carries the
+		// measured frame length so the gate reads the number rather than
+		// trusting it (swim.mp3 is 0.7837 s => 47 frames at FPS 60).
+		private static var pinPos:Object = { };   // "set#idx" -> position, in FRAMES
+		private static var pinOpen:Object = { };  // "set#idx" -> is a channel open
+		private static var pinLen:Object = { };   // "set#idx" -> length, in FRAMES
+
+		private static function pinKey(strInd:String, i:int):String
+		{
+			return strInd + "#" + i;
+		}
+
+		/** Forget every pinned channel. Called from `Bot.botStart`. */
+		public static function pinReset():void
+		{
+			pinPos = { };
+			pinOpen = { };
+			pinLen = { };
+		}
+
+		/**
+		 * One frame of the pinned mixer. Called once per `Bot.update()`,
+		 * which is once per engine frame — INCLUDING dead and frozen frames,
+		 * because a real mixer keeps running through both.
+		 */
+		public static function pinStep():void
+		{
+			for (var s:int = 0; s < setNames.length; s++)
+			{
+				var strInd:String = setNames[s];
+				for (var i:int = 0; i < sounds[strInd].length; i++)
+				{
+					var key:String = pinKey(strInd, i);
+					if (pinOpen[key] != true) continue;
+					var pos:int = int(pinPos[key]) + 1;
+					if (pos >= int(pinLen[key]))
+					{
+						pinOpen[key] = false;
+						pinPos[key] = 0;
+					}
+					else
+					{
+						pinPos[key] = pos;
+					}
+				}
+			}
+		}
+
+		/** A pinned channel opens. Mirrors `Sfx.play`. */
+		private static function pinPlayed(strInd:String, i:int):void
+		{
+			var key:String = pinKey(strInd, i);
+			if (pinLen[key] == null)
+			{
+				var secs:Number = (soundsO[strInd][i] as Sfx).length;
+				var frames:int = Math.round(secs * Main.FPS);
+				if (frames <= 0)
+				{
+					Bot.pinFault("sound pin: " + key + " reports length "
+						+ secs + " s (" + frames + " frames); a pinned channel "
+						+ "with no length completes on its first step and "
+						+ "replays every frame, which is not an execution the "
+						+ "vanilla game can produce");
+					return;
+				}
+				pinLen[key] = frames;
+			}
+			pinPos[key] = 0;
+			pinOpen[key] = true;
+		}
+
+		/** A pinned channel closes with its position KEPT. Mirrors `Sfx.stop`. */
+		private static function pinStopped(strInd:String, i:int):void
+		{
+			pinOpen[pinKey(strInd, i)] = false;
+		}
+
+		/** Pinned `Sfx.position`, in SECONDS — the unit `soundPosition` returns. */
+		private static function pinPosition(strInd:String, i:int):Number
+		{
+			return int(pinPos[pinKey(strInd, i)]) / Number(Main.FPS);
+		}
+
+		/** Pinned `Sfx.playing`. */
+		private static function pinPlaying(strInd:String, i:int):Boolean
+		{
+			return pinOpen[pinKey(strInd, i)] == true;
+		}
+
+		/** Pinned `position / length`, the ratio `soundPercentage` returns. */
+		private static function pinFraction(strInd:String, i:int):Number
+		{
+			var key:String = pinKey(strInd, i);
+			// A never-played channel has no measured length. Vanilla divides
+			// `_position` 0 by a real `Sound.length`, so 0 is the same answer.
+			if (pinLen[key] == null) return 0;
+			return int(pinPos[key]) / Number(int(pinLen[key]));
+		}
+
+		/**
+		 * The pinned mixer, as `botStatus` reports it for ONE set.
+		 *
+		 * ⚠ It reports `len_frames` rather than only position/playing,
+		 * because the fault above is the one that matters and a readout that
+		 * showed only the position would look perfectly healthy while the
+		 * length was garbage. Zero here means the set has never been played.
+		 */
+		public static function pinReadout(strInd:String):Object
+		{
+			var out:Array = new Array();
+			for (var i:int = 0; i < sounds[strInd].length; i++)
+			{
+				var key:String = pinKey(strInd, i);
+				out.push({
+					len_frames: (pinLen[key] == null) ? 0 : int(pinLen[key]),
+					frames: int(pinPos[key]),
+					playing: pinOpen[key] == true
+				});
+			}
+			return { set: strInd, channels: out };
+		}
+
 		/**
 		 * Plays a sound from a set, such as "Swords", with index intInd (-1 picks a random sound from the set)
 		 * @param	strInd	the set to play from
@@ -491,6 +679,9 @@ package
 			currentSet = strInd;
 			currentIndex = cplayIndex;
 			soundsO[currentSet][currentIndex].play(vol, pan);
+			// R5 PIN: the real channel is still opened — the sound plays as
+			// it always did. Only the CLOCK the game reads is pinned.
+			if (Bot.pinSoundClock) pinPlayed(currentSet, currentIndex);
 			return soundsO[currentSet][currentIndex];
 		}
 		
@@ -529,10 +720,15 @@ package
 				for (var i:int = 0; i < sounds[strInd].length; i++)
 				{
 					soundsO[strInd][i].stop();
+					if (Bot.pinSoundClock) pinStopped(strInd, i);
 				}
 			}
 			else
-				soundsO[strInd][Math.min(Math.max(intInd, 0), sounds[strInd].length - 1)].stop();
+			{
+				var one:int = Math.min(Math.max(intInd, 0), sounds[strInd].length - 1);
+				soundsO[strInd][one].stop();
+				if (Bot.pinSoundClock) pinStopped(strInd, one);
+			}
 		}
 		
 		/**
@@ -565,13 +761,20 @@ package
 			{
 				for (var i:int = 0; i < sounds[strInd].length; i++)
 				{
-					if (soundsO[strInd][i].playing)
+					// R5 PIN — the whole-set shape is preserved exactly; only
+					// the per-channel answer moves to the frame clock.
+					if (Bot.pinSoundClock ? pinPlaying(strInd, i)
+										  : soundsO[strInd][i].playing)
 						return true;
 				}
 				return false;
 			}
 			else
-				return soundsO[strInd][Math.min(Math.max(intInd, 0), sounds[strInd].length - 1)].playing;
+			{
+				var one:int = Math.min(Math.max(intInd, 0), sounds[strInd].length - 1);
+				if (Bot.pinSoundClock) return pinPlaying(strInd, one);
+				return soundsO[strInd][one].playing;
+			}
 		}
 		
 		/**
@@ -587,12 +790,17 @@ package
 				var soundPos:Number = 0;
 				for (var i:int = 0; i < sounds[strInd].length; i++)
 				{
-					soundPos = Math.max(soundPos, soundsO[strInd][i].position);
+					soundPos = Math.max(soundPos, Bot.pinSoundClock
+						? pinPosition(strInd, i) : soundsO[strInd][i].position);
 				}
 				return soundPos;
 			}
 			else
-				return soundsO[strInd][Math.min(Math.max(intInd, 0), sounds[strInd].length - 1)].position;
+			{
+				var one:int = Math.min(Math.max(intInd, 0), sounds[strInd].length - 1);
+				if (Bot.pinSoundClock) return pinPosition(strInd, one);
+				return soundsO[strInd][one].position;
+			}
 		}
 		
 		/**
@@ -608,12 +816,18 @@ package
 				var soundPos:Number = 0;
 				for (var i:int = 0; i < sounds[strInd].length; i++)
 				{
-					soundPos = Math.max(soundPos, soundsO[strInd][i].position / soundsO[strInd][i].length);
+					soundPos = Math.max(soundPos, Bot.pinSoundClock
+						? pinFraction(strInd, i)
+						: soundsO[strInd][i].position / soundsO[strInd][i].length);
 				}
 				return soundPos;
 			}
 			else
-				return soundsO[strInd][Math.min(Math.max(intInd, 0), sounds[strInd].length - 1)].position / soundsO[strInd][Math.min(Math.max(intInd, 0), sounds[strInd].length - 1)].length;
+			{
+				var one:int = Math.min(Math.max(intInd, 0), sounds[strInd].length - 1);
+				if (Bot.pinSoundClock) return pinFraction(strInd, one);
+				return soundsO[strInd][one].position / soundsO[strInd][one].length;
+			}
 		}
 		
 		

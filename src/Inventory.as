@@ -133,6 +133,20 @@ package
 		{
 			return items[i];
 		}
+		/**
+		 * How many slots the inventory currently holds. (Bot, R4.)
+		 *
+		 * `getItem` cannot answer this: its return type is `int`, so an
+		 * out-of-range `items[i]` is `undefined` coerced to **0** — which is
+		 * indistinguishable from "slot 0 holds the sword". `Main.primary` is
+		 * an index into this array and `Player.useItem` switches on whatever
+		 * `getItem` returns, so a bot writing a slot that does not exist gets
+		 * a SILENT no-op. Read-only; changes nothing about the game.
+		 */
+		public static function get itemCount():int
+		{
+			return items.length;
+		}
 		
 		public function set open(_o:Boolean):void
 		{

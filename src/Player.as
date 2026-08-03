@@ -346,6 +346,24 @@ package
 		
 		private var frozenTimer:int = 0;
 		private const frozenTimerMax:int = 90;
+		/**
+		 * The freeze countdown, for `Bot.botStatus`. (R5 batch — a READOUT.)
+		 *
+		 * A GETTER rather than a widened field, so the surface is provably
+		 * read-only: `IceTurretBlast` is the only writer and stays the only
+		 * writer. `hits` and `hitsTimer` beside it are already public.
+		 *
+		 * ⚠ Why the bot needs it at all: a frozen player takes no input
+		 * (`Player.input` returns while `frozenTimer > 0`) but the frames are
+		 * NOT dead — `Game.freezeObjects` is a different flag and the
+		 * dead-frame gate does not see this one — so the tape keeps
+		 * advancing while the player stands still. Without the readout that
+		 * is indistinguishable from a walk that simply did not move.
+		 */
+		public function get frozenTicks():int
+		{
+			return frozenTimer;
+		}
 		
 		public var onGround:Boolean = true;
 		

@@ -104,6 +104,30 @@ package
 		 * to `Tile.types` indices lives in `coerceState` below and in
 		 * `tapeFormat.HAZARD_STATES` on the other side.
 		 */
+		/**
+		 * ── The R5 DETERMINISM PINS (kickoff §3.6 / §13) ─────────────────
+		 *
+		 * A different CLASSIFICATION from everything above it. The R0
+		 * relaxations are *crutches* — a later rung retires each one. These
+		 * two are **PINS**: they select WHICH vanilla-reachable execution the
+		 * run gets (the one a steady-60 fps browser gives) and create no
+		 * vanilla-unreachable one, so they are kept forever and every
+		 * recording made under them is still a real-game run.
+		 *
+		 * Both default FALSE. That is not tidiness — it is what makes the R0
+		 * byte-inertness gate mean anything: all 57 frozen fixtures replay
+		 * through the vanilla path on this build, and a pin that had changed
+		 * a live tick would show up there rather than in a mystery
+		 * divergence later.
+		 *
+		 * Set from a version-5 tape's `pins` list. The rationale for each is
+		 * at its own site — `Music.pinStep` and `Game.stepBlackCover` — and
+		 * NOT here, because the site is where somebody reading the mechanism
+		 * will be.
+		 */
+		public static var pinSoundClock:Boolean = false;
+		public static var pinDeadFrames:Boolean = false;
+
 		public static var noWater:Boolean = false;      // state 1
 		public static var noPit:Boolean = false;        // state 6
 		public static var noLava:Boolean = false;       // state 17
@@ -135,6 +159,27 @@ package
 			if (noIce && s == 22) return 0;
 			if (noWaterfall && s == 25) return 0;
 			return s;
+		}
+
+		/**
+		 * A pin could not do its job. STOPS THE TAPE.
+		 *
+		 * ⚠ Disarming, not just recording. Neither the differential harness
+		 * nor the Windows replay driver reads `botStatus.error`, so an error
+		 * that only recorded itself would be invisible — the silent-watcher
+		 * family, and here it would be worse than invisible: a pin that
+		 * quietly stopped pinning would hand back a recording that LOOKS
+		 * frame-exact and is not. Disarming truncates the observation
+		 * stream, which every consumer already compares exactly.
+		 *
+		 * The first fault wins; a later one must not overwrite the cause.
+		 */
+		public static function pinFault(why:String):void
+		{
+			if (errorText != "") return;
+			errorText = why;
+			armed = false;
+			finished = true;
 		}
 
 		/** Canonical key-name -> keycode table. MUST match tapeFormat.js. */
@@ -209,6 +254,78 @@ package
 		 */
 		private static var persistLevel:Array = new Array();
 		private static var persistTag:Array = new Array();
+
+		/**
+		 * R4, tape version 4: EQUIPS — `[{t, slot}]`, one write to
+		 * `Main.primary` at observation tick `t`.
+		 *
+		 * ⚠ WHY THIS IS A DIRECTIVE AND NOT A TAPE SPAN. `Player.useItem`
+		 * switches on `Inventory.getItem(Main.primary)`, so pressing X with
+		 * `Main.primary` at its default 0 is always a SWORD SLASH — and the
+		 * bridge tile at `Player.as:1098` decrements only under `t == "Spear"`.
+		 * The game's only in-game way to change the slot is the inventory
+		 * screen, and `Inventory.set open` IS `Game.freezeObjects = _open`
+		 * with one writer and no per-frame reset: the R4 slice-0 probe opened
+		 * it from a tape and the tick counter PINNED two ticks later with
+		 * `dead_frames` climbing without bound. Frozen frames are dead frames,
+		 * so no span in any tape can ever reach the arrows, the X, or the
+		 * closing V. (This is NOT the dialogue phase, where several writers
+		 * move the flag within a frame and the tape does keep ticking.)
+		 *
+		 * So the directive is UI SUPPRESSION, the same classification R1's
+		 * `Inventory.help = false` earned and for the same reason: it grants
+		 * nothing. The slot must already hold the item, `useItem` still routes
+		 * through `Inventory.getItem`, and the game's OWN debug warps write
+		 * `Main.primary` (`Player.as:1793`, `:1812`, `:1832`, and two more).
+		 * `Main.primary` is SharedObject-backed and slice 0 confirmed the
+		 * store is page-local — two fresh pages after a granting run both boot
+		 * with every flag false — so the write adds no cross-recording risk.
+		 */
+		private static var equipTick:Array = new Array();
+		private static var equipSlot:Array = new Array();
+		/** Sticky report: which equips fired, and at which observation tick. */
+		private static var equipsFired:Array = new Array();
+		/**
+		 * Equips whose slot has not been validated yet, and why the check
+		 * cannot be eager.
+		 *
+		 * `Inventory.items` is filled by `addItemsFromSave`, which runs inside
+		 * `inventory.update()` — LATER in the same frame than the grant/equip
+		 * site, and only while `canInventory()`. A segment tape inherits its
+		 * items through a boot-level grant and its slot through
+		 * `equips: [{t: 0, slot: 1}]`, so an eager `slot < itemCount` check
+		 * would fail at t=0 BY CONSTRUCTION on every segment. The write
+		 * happens on time; the check is drained on the first frame the
+		 * inventory is non-empty, and it names the equip's own tick.
+		 */
+		private static var pendEquipSlot:Array = new Array();
+		private static var pendEquipTick:Array = new Array();
+
+		/** The loaded tape's declared version — see `autoAdvance`'s counter. */
+		private static var tapeVersion:int = 0;
+
+		/**
+		 * Was a `Help` up on the previous dead frame? (R4, the counter fix.)
+		 *
+		 * `saw_auto_advance` counted on phase 1 — the RELEASE — and a `Help`
+		 * ends its freeze on the PRESS, so phase 1 never ran and the counter
+		 * could not see it. Counting a Help's ARRIVAL instead of a phase makes
+		 * it one per Help however many presses it takes, which is what the
+		 * readout is supposed to mean.
+		 */
+		private static var helpWasUp:Boolean = false;
+
+		/**
+		 * Was ANY freeze up on the previous dead frame? (R5, the unification.)
+		 *
+		 * R4 left two counting rules coexisting: a dialogue counted on the
+		 * RELEASE (phase 1) and a `Help` counted on its ARRIVAL, because a
+		 * Help ends its freeze on the press and phase 1 never runs for one.
+		 * v5 keeps one rule for both — count a FREEZE ARRIVAL — and this is
+		 * its edge memory. Reset on every live frame, like `helpWasUp`, so
+		 * two freezes separated by live frames count as two.
+		 */
+		private static var freezeWasUp:Boolean = false;
 
 		/**
 		 * Dialogue auto-advance, counted in DEAD frames.
@@ -301,8 +418,8 @@ package
 				var t:Object = JSON.parse(json);
 
 				var version:int = int(t.tape_version);
-				if (version != 1 && version != 2 && version != 3)
-					return "error:tape_version must be 1, 2 or 3, got " + t.tape_version;
+				if (version < 1 || version > 5)
+					return "error:tape_version must be 1, 2, 3, 4 or 5, got " + t.tape_version;
 				if (t.game != "seedling")
 					return "error:game must be seedling, got " + t.game;
 				if (!(t.noclip is Boolean))
@@ -326,6 +443,10 @@ package
 				var newGrantItems:Array = new Array();
 				var newPersistLevel:Array = new Array();
 				var newPersistTag:Array = new Array();
+				var newEquipTick:Array = new Array();
+				var newEquipSlot:Array = new Array();
+				var newPinSound:Boolean = false;
+				var newPinDeadFrames:Boolean = false;
 				var j:int;
 
 				if (version == 1)
@@ -438,6 +559,97 @@ package
 					}
 				}
 
+				// ── the version 4 field: equips ───────────────────────────
+				// ⚠ VALUE-SCOPED, NOT PRESENCE-SCOPED — the third time this
+				// comment has had to be written, and the reason is unchanged:
+				// `parseTape` is idempotent and NORMALISES, so a parsed v1/v2/
+				// v3 tape arrives over the wire carrying `equips: []`. A
+				// presence check would reject every committed fixture, which
+				// is exactly what the first build of the R0 batch did with
+				// `noDamage`.
+				if (version < 4)
+				{
+					if (t.equips != null && (t.equips as Array) != null
+						&& (t.equips as Array).length > 0)
+						return "error:tape_version " + version
+							+ " means equips: [] BY DEFINITION";
+				}
+				else
+				{
+					if (!(t.equips is Array))
+						return "error:equips must be an array on a version 4 tape";
+					var equips:Array = t.equips as Array;
+					for (j = 0; j < equips.length; j++)
+					{
+						var eq:Object = equips[j];
+						if (eq == null)
+							return "error:equips[" + j + "] must be {t, slot}";
+						var et:int = int(eq.t);
+						var es:int = int(eq.slot);
+						if (et < 0)
+							return "error:equips[" + j + "].t must be >= 0";
+						// The slot's UPPER bound cannot be checked here — the
+						// inventory array does not exist until the first
+						// `inventory.update()` of the first world. See
+						// `pendEquipSlot`. What IS checkable is that it is not
+						// negative: `items[-1]` is `undefined`, `useItem`
+						// coerces it to 0, and the press would silently become
+						// a sword slash.
+						if (es < 0)
+							return "error:equips[" + j + "].slot must be >= 0";
+						for (var ej:int = 0; ej < newEquipTick.length; ej++)
+						{
+							if (int(newEquipTick[ej]) == et)
+								return "error:equips[" + j + "] duplicates tick " + et;
+						}
+						newEquipTick.push(et);
+						newEquipSlot.push(es);
+					}
+				}
+
+				// ── the version 5 field: the determinism PINS ─────────────
+				// ⚠ VALUE-SCOPED, NOT PRESENCE-SCOPED — the fourth time, and
+				// the reason has not changed since the R0 batch: `parseTape`
+				// is idempotent and NORMALISES, so a parsed v1..v4 tape
+				// arrives over the wire carrying `pins: []`. A presence check
+				// would reject every committed fixture.
+				//
+				// An ARRAY OF NAMES rather than two booleans, the `noHazards`
+				// shape, and for the same reason: R5 opened the batch with
+				// two pins and the next one that gets ruled in must not cost
+				// a second full pipeline run to express.
+				if (version < 5)
+				{
+					if (t.pins != null && (t.pins as Array) != null
+						&& (t.pins as Array).length > 0)
+						return "error:tape_version " + version
+							+ " means pins: [] BY DEFINITION";
+				}
+				else
+				{
+					if (!(t.pins is Array))
+						return "error:pins must be an array on a version 5 tape";
+					var pins:Array = t.pins as Array;
+					for (j = 0; j < pins.length; j++)
+					{
+						var pn:String = String(pins[j]);
+						if (pn == "sound")
+						{
+							if (newPinSound)
+								return "error:pins[" + j + "] duplicates \"sound\"";
+							newPinSound = true;
+						}
+						else if (pn == "dead_frames")
+						{
+							if (newPinDeadFrames)
+								return "error:pins[" + j + "] duplicates \"dead_frames\"";
+							newPinDeadFrames = true;
+						}
+						else return "error:pins[" + j + "] \"" + pn
+							+ "\" is not a pin name";
+					}
+				}
+
 				var codes:Array = new Array();
 				var froms:Array = new Array();
 				var tos:Array = new Array();
@@ -485,6 +697,14 @@ package
 				grantsFired = new Array();
 				persistLevel = newPersistLevel;
 				persistTag = newPersistTag;
+				equipTick = newEquipTick;
+				equipSlot = newEquipSlot;
+				equipsFired = new Array();
+				pendEquipSlot = new Array();
+				pendEquipTick = new Array();
+				pinSoundClock = newPinSound;
+				pinDeadFrames = newPinDeadFrames;
+				tapeVersion = version;
 
 				loaded = true;
 				armed = false;
@@ -495,6 +715,8 @@ package
 				deadFrames = 0;
 				autoAdvancePhase = 0;
 				sawAutoAdvance = 0;
+				helpWasUp = false;
+				freezeWasUp = false;
 				clearObservations();
 				return "ok";
 			}
@@ -599,7 +821,12 @@ package
 			autoAdvancePhase = 0;
 			autoAdvanceHeld = false;
 			sawAutoAdvance = 0;
+			helpWasUp = false;
+			freezeWasUp = false;
 			grantsFired = new Array();
+			equipsFired = new Array();
+			pendEquipSlot = new Array();
+			pendEquipTick = new Array();
 			clearObservations();
 			return "ok";
 		}
@@ -735,7 +962,66 @@ package
 				// above — a flag here but not there was cleared by the
 				// PLAYER, which is what "collected for real" means.
 				persistence_cleared: persistenceClearedAll(),
-				saw_auto_advance: sawAutoAdvance
+				saw_auto_advance: sawAutoAdvance,
+				// ── R4 ────────────────────────────────────────────────────
+				// The equip, two-sidedly. `primary` is read from the game's
+				// own `Main.primary` and `inventory_slots` is SCANNED from
+				// `Inventory` — never echoed from the tape — so the JS slot
+				// mirror (its transcription of `addItemsFromSave`'s order:
+				// sword, fire, wand, spear, with the fusion splices) is
+				// asserted against the game on every tape. A new tape field
+				// is a place for two consumers to disagree, and a slot-order
+				// divergence would otherwise surface much later as a
+				// mysterious slash-instead-of-thrust.
+				primary: Main.primary,
+				secondary: Main.secondary,
+				inventory_slots: slotsReadout(),
+				equips: equipsFired,
+				// `Player.drownTimer` is CUMULATIVE and is never reset once a
+				// hazard has touched it — the only writes are `= drownTimerMax`
+				// on the first contact tick, the decrement, and `drown()`'s own
+				// spiral. So a walk that declares lava armed and reports 0 here
+				// has, in the GAME's own accounting, never stood on an
+				// unprotected hazard tile. That is the positive control the
+				// forbidden-floor policy needs; without it "the walk avoided
+				// the lava" is only ever a claim about the planner.
+				drown_timer: (p == null) ? 0 : p.drownTimer,
+				// ── R5, THE FOUR READOUTS ────────────────────────────────
+				// All four are READOUTS: they change no gameplay at all, and
+				// they exist because of what a check can then be PHRASED
+				// from. R4 closed with every kill witnessed only by what it
+				// OPENS; these make the game report the fight itself.
+				//
+				// `hits` is the damage TAKEN (0..hitsMax), `hits_timer` the
+				// i-frame countdown after a hit, `frozen_timer` the
+				// IceTurretBlast freeze. Together with `drown_timer` above
+				// they are the whole of "what has happened to this player" —
+				// so a walk claiming a clean crossing has a POSITIVE control
+				// for it, and a kill window that took a hit on the way is a
+				// named failure instead of an unexplained position drift.
+				hits: (p == null) ? 0 : p.hits,
+				hits_timer: (p == null) ? 0 : p.hitsTimer,
+				frozen_timer: (p == null) ? 0 : p.frozenTicks,
+				// `Game.time` IS `Main.time` — a static that survives every
+				// world swap (Game.as:490-497), which is exactly why it can
+				// be read at a window boundary at all. `timeRate` is 1 for
+				// every bot tape (it decays only in the intro cutscene), so
+				// this is the live tick count the `Game.worldFrame`-coupled
+				// family reads. It turns hazard phase from a DERIVATION with
+				// a ±k band into a MEASUREMENT, and lets the director
+				// wait-to-align at a safe stance before a crossing.
+				//
+				// ⚠ It is a readout, not a pin, and the two are independent:
+				// with `dead_frames` pinned this number is also predictable,
+				// but the readout is what proves that rather than assuming
+				// it.
+				game_time: Game.time,
+				// The pinned mixer's own numbers for the ONE set with a
+				// gameplay reader. `len_frames` 0 on a set that has played
+				// means `Sfx.length` did not answer — see `Music.pinPlayed`,
+				// which faults rather than carrying on.
+				sound_pin: pinSoundClock ? Music.pinReadout("Swim") : null,
+				pins: { sound: pinSoundClock, dead_frames: pinDeadFrames }
 			};
 			return JSON.stringify(o);
 		}
@@ -759,6 +1045,25 @@ package
 				hasTorch: Player.hasTorch,
 				hitsMax: Player.hitsMax
 			};
+		}
+
+		/**
+		 * The inventory's slot array, scanned rather than reconstructed.
+		 *
+		 * The ids are `Inventory`'s own: 0 sword, 1 fire, 2 wand, 3 spear,
+		 * 4 ghostsword, 5 firewand. `Player.useItem` switches on exactly
+		 * these, so this is the array `Main.primary` indexes into and the
+		 * one the JS mirror has to reproduce.
+		 */
+		private static function slotsReadout():Array
+		{
+			var out:Array = new Array();
+			var n:int = Inventory.itemCount;
+			for (var i:int = 0; i < n; i++)
+			{
+				out.push(Inventory.getItem(i));
+			}
+			return out;
 		}
 
 		/** The tape's item vocabulary — `games/seedling.json`'s flash_names. */
@@ -838,6 +1143,60 @@ package
 		}
 
 		/**
+		 * Apply any equip naming observation tick `t`.
+		 *
+		 * Called immediately AFTER `applyGrantsFor` on the same observation,
+		 * so a tape may grant an item and select it on the same tick — which
+		 * is exactly what a segment does at t=0.
+		 *
+		 * The write itself is one line. Everything around it is the
+		 * validation, because `Player.useItem`'s `switch` on an out-of-range
+		 * slot falls through to nothing: a wrong slot is a SILENT no-op, the
+		 * failure mode a tape format exists to prevent.
+		 */
+		private static function applyEquipsFor(t:int):void
+		{
+			for (var i:int = 0; i < equipTick.length; i++)
+			{
+				if (int(equipTick[i]) != t) continue;
+				var slot:int = int(equipSlot[i]);
+				Main.primary = slot;
+				equipsFired.push({ t: t, slot: slot });
+				pendEquipSlot.push(slot);
+				pendEquipTick.push(t);
+			}
+		}
+
+		/**
+		 * Drain the deferred slot checks, once the inventory exists.
+		 *
+		 * ⚠ The FAILURE STOPS THE TAPE rather than only setting `errorText`.
+		 * Neither the differential harness nor the Windows replay driver
+		 * reads `botStatus.error`, so an error that only recorded itself
+		 * would be invisible — and "the run reported a problem nobody read"
+		 * is the silent-watcher family. Disarming truncates the observation
+		 * stream, which every consumer already compares exactly.
+		 */
+		private static function drainEquipChecks():void
+		{
+			if (pendEquipTick.length == 0) return;
+			if (Inventory.itemCount <= 0) return;
+			for (var i:int = 0; i < pendEquipTick.length; i++)
+			{
+				var slot:int = int(pendEquipSlot[i]);
+				if (slot < Inventory.itemCount) continue;
+				errorText = "equip at tick " + pendEquipTick[i] + " selected slot "
+					+ slot + " but the inventory holds " + Inventory.itemCount
+					+ " item(s); useItem on an out-of-range slot is a silent no-op";
+				armed = false;
+				finished = true;
+				return;
+			}
+			pendEquipSlot = new Array();
+			pendEquipTick = new Array();
+		}
+
+		/**
 		 * Drain the observation buffer as JSON and clear it.
 		 *
 		 * ⚠ MUST NEVER RETURN THE EMPTY STRING: the page shim normalizes a
@@ -880,6 +1239,17 @@ package
 			noLava = false;
 			noIce = false;
 			noWaterfall = false;
+			// ⚠ The pinned mixer is forgotten HERE and nowhere else — never
+			// from `botStart`. `botStart` is also the CONTINUATION path (the
+			// director's window boundaries), and a real mixer does not
+			// restart because a window ended: a swim sound that is 12 frames
+			// in stays 12 frames in across the boundary. Resetting there
+			// would make the pin disagree with the thing it is pinning, and
+			// would do it exactly where the player is mid-swim. `botReset` is
+			// "forget the tape", which is what a fresh page does anyway.
+			pinSoundClock = false;
+			pinDeadFrames = false;
+			Music.pinReset();
 			spanCode = new Array();
 			spanFrom = new Array();
 			spanTo = new Array();
@@ -891,6 +1261,9 @@ package
 			autoAdvancePhase = 0;
 			autoAdvanceHeld = false;
 			sawAutoAdvance = 0;
+			helpWasUp = false;
+			freezeWasUp = false;
+			tapeVersion = 0;
 			clearObservations();
 			return "ok";
 		}
@@ -916,6 +1289,12 @@ package
 		public static function update():void
 		{
 			init();
+			// ⚠ ABOVE the armed check, and on EVERY frame including dead and
+			// frozen ones. The thing being pinned is a mixer, and a mixer
+			// does not stop because the tape is between windows or because
+			// the room is fading. Gating this on `armed` would make the swim
+			// clock jump at exactly the boundaries the director cuts on.
+			if (pinSoundClock) Music.pinStep();
 			if (!armed) return;
 
 			var game:Game = FP.world as Game;
@@ -939,6 +1318,13 @@ package
 				autoAdvanceHeld = false;
 			}
 			autoAdvancePhase = 0;
+			// A live frame ends whatever freeze there was, so the next Help
+			// is a NEW arrival. Without this, two Helps separated by live
+			// frames would count as one — the counter's whole job is to be a
+			// census guard, and a guard that under-counts is worse than one
+			// that is absent.
+			helpWasUp = false;
+			freezeWasUp = false;
 
 			var p:Player = findPlayer();
 			if (p == null)
@@ -959,6 +1345,11 @@ package
 			// the observation stream is unchanged either way; what the two
 			// sides have to agree on is WHEN.
 			applyGrantsFor(Main.level, tick);
+			// R4: the slot selection, on the same observation and AFTER the
+			// grants, so a segment can inherit `spear` and select it at t=0.
+			applyEquipsFor(tick);
+			drainEquipChecks();
+			if (!armed) return;
 
 			// Edges for this tick: UP for every span ending here, DOWN for
 			// every span starting here. Releases go first so a tape that
@@ -976,6 +1367,19 @@ package
 
 			if (tick >= tickCount)
 			{
+				// ⚠ An equip whose check never drained is a FAILURE, not a
+				// pass. `drainEquipChecks` no-ops while the inventory is
+				// empty, so a tape that equipped a slot in a run that never
+				// built an inventory at all would otherwise finish green
+				// having validated nothing — a check that cannot fail is
+				// indistinguishable from one that is absent.
+				if (pendEquipTick.length > 0)
+				{
+					errorText = "equip at tick " + pendEquipTick[0] + " was never "
+						+ "validated: the inventory was empty for the whole tape, so "
+						+ "the slot cannot have held anything and every press was a "
+						+ "silent no-op";
+				}
 				// The final observation has been recorded and every hold
 				// released; disarm without consuming another tick.
 				armed = false;
@@ -1079,7 +1483,57 @@ package
 			// world reference is re-read here rather than assumed.
 			var helpUp:Boolean = FP.world != null
 				&& FP.world.classFirst(Help) != null;
-			if (!Game.talking && !helpUp)
+			// ── R4: THE COUNTER FIX, AND WHY IT IS VERSION-SCOPED ─────────
+			//
+			// The blind spot the paragraph above describes, closed: count a
+			// Help's ARRIVAL rather than a phase. A Help ends its freeze on
+			// the PRESS (phase 0), so phase 1 — where the counter lived —
+			// never runs for one; counting the arrival is also immune to a
+			// Help that needs more than one press, which a phase-0 counter
+			// would double-count.
+			//
+			// ⚠ IT IS NOT BYTE-INERT, WHICH IS WHY IT IS SCOPED TO v4. The
+			// sword's `Help(3)` is auto-advanced on every run that collects
+			// the sword, so an unscoped fix changes the REPORTED VALUE for
+			// ~8 frozen R3 collection fixtures whose committed expectations
+			// say `saw_auto_advance: 0` and whose sweep asserts that field
+			// per tape. They would fail the flags-off inertness gate BY
+			// BEING CORRECT. v<=3 tapes keep the bug-compatible count; a v4
+			// tape gets the honest one, and R4 asserts it as a POSITIVE.
+			// ── R5: THE UNIFICATION, AND WHY IT IS ALSO VERSION-SCOPED ────
+			//
+			// R4's fix above closed the blind spot but left TWO counting
+			// rules in one counter: a dialogue counted on the RELEASE, a
+			// `Help` on its ARRIVAL. So `saw_auto_advance` meant "dialogue
+			// releases plus Help arrivals" — a number with no single unit,
+			// which is not a census guard so much as two guards sharing a
+			// field. R3 recorded the fix as owed and R4 could only do half of
+			// it; this is the other half.
+			//
+			// v5's rule is ONE: count a FREEZE ARRIVAL, whatever raised it.
+			// The unit is then "ceremonies the bot dismissed", which is what
+			// the readout was always supposed to mean and what the fixture
+			// sweeps assert as `0`.
+			//
+			// ⚠ SCOPED, for the R4 reason exactly: it is NOT byte-inert. A
+			// dialogue that takes several presses counted once per release
+			// under v<=4 and counts once TOTAL under v5, so an unscoped
+			// change would move the reported value for committed fixtures
+			// whose expectations say `saw_auto_advance: 0` and whose sweep
+			// asserts that field per tape — they would fail the flags-off
+			// inertness gate BY BEING CORRECT.
+			var freezeUp:Boolean = Game.talking || helpUp;
+			if (tapeVersion >= 5)
+			{
+				if (freezeUp && !freezeWasUp) sawAutoAdvance++;
+			}
+			else if (tapeVersion == 4)
+			{
+				if (helpUp && !helpWasUp) sawAutoAdvance++;
+			}
+			freezeWasUp = freezeUp;
+			helpWasUp = helpUp;
+			if (!freezeUp)
 			{
 				autoAdvancePhase = 0;
 				return;
@@ -1094,7 +1548,10 @@ package
 			{
 				dispatchKey(KEY_PRIMARY, false);
 				autoAdvanceHeld = false;
-				sawAutoAdvance++;
+				// v5 counts arrivals above; counting here too would
+				// double-count a multi-press dialogue, which is the defect
+				// the unification exists to remove.
+				if (tapeVersion < 5) sawAutoAdvance++;
 			}
 			autoAdvancePhase++;
 		}
