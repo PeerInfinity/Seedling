@@ -2,8 +2,12 @@ package
 {
 	import flash.events.KeyboardEvent;
 	import flash.external.ExternalInterface;
+	import flash.utils.getQualifiedClassName;
 	import net.flashpunk.FP;
+	import net.flashpunk.graphics.Image;
+	import net.flashpunk.graphics.Spritemap;
 	import NPCs.Help;
+	import Enemies.Enemy;
 
 	/**
 	 * Bot — a generic, data-driven INPUT TAPE INTERPRETER compiled into the
@@ -301,6 +305,64 @@ package
 		private static var pendEquipSlot:Array = new Array();
 		private static var pendEquipTick:Array = new Array();
 
+		/**
+		 * R5 slice 23, tape version 6: THE SAVE-ARRAY BOOT BLOCK.
+		 *
+		 * ── The wall this exists to remove ───────────────────────────────
+		 * `Bot`'s boot block honoured exactly two kinds of state — `grants`
+		 * (Inventory item booleans) and `persistence` (levelPersistence
+		 * tags) — and `Main.SAVE_FILE.data` holds FIVE more kinds, three of
+		 * them ARRAYS that gameplay reads:
+		 *
+		 *   hasTotemPart[5]  `Wand.update` is gated on
+		 *                    `Player.hasAllTotemParts()`, so a window that
+		 *                    BOOTS into level 43 finds an inert pickup and
+		 *                    the wand ceremony can never start.
+		 *   hasKey[5]        `BossLock.update` opens on
+		 *                    `Player.hasKey(keyType)`.
+		 *   hasSealPart[16]  `FinalDoor.update` opens on
+		 *                    `SealController.hasAllSealParts()` — the
+		 *                    ending's own gate.
+		 *
+		 * ⚠ THIS IS A BOOT PRESENTATION, NOT A GRANT. It is applied in
+		 * `botStart` BEFORE the first world is built, for the same reason
+		 * the persistence clears are: `BossTotemPart.check()` and
+		 * `BossKey.check()` REMOVE THEMSELVES when the player already holds
+		 * their index, and `check()` runs on a new world's first frame. A
+		 * write after the world exists leaves the pickup standing for that
+		 * visit — the "already too late to despawn" fact the R0 grants
+		 * ruling turned on.
+		 *
+		 * ⚠ AND `hasSealPart` IS AN **INT** ARRAY WITH IDENTITY SLOTS, not
+		 * a per-index boolean. `SealController.getSealPart(index)` writes
+		 * `index` into the FIRST slot still holding -1, so the array is an
+		 * ordered collection LOG and `hasAllSealParts()` is
+		 * `hasSealPart(SEALS - 1) != -1` — the LAST SLOT being filled.
+		 * Writing `hasSealPartSet(i, 1)` for "has seal i" would be the wrong
+		 * shape in a way that reads correctly: it would set seal-part
+		 * IDENTITY 1 into slot i, and `hasAllSealParts` would then be
+		 * satisfied by any sixteen writes whatsoever. The tape therefore
+		 * declares the collection ORDER and this code fills slots 0..n-1.
+		 *
+		 * ⚠ A RESET PRECEDES THE APPLY, and it is gated on the tape having
+		 * declared something — so a v1..v5 tape takes a byte-identical path
+		 * to the one it took before this batch. The reset exists so a v6
+		 * tape's state is a pure function of the tape rather than of
+		 * whatever ran on the page before it. Windows share a page BY
+		 * DESIGN (the director's continuations), so "the caller uses a fresh
+		 * page" is not available as an argument here the way it was for
+		 * `persistence`.
+		 *
+		 * ⛔ AND THERE IS NO WAY TO UNSET FROM A TAPE beyond the reset: the
+		 * three arrays are ADDITIVE state a real playthrough only ever
+		 * accumulates, and the reset is to the FRESH-SAVE value (false,
+		 * false, -1), which is exactly what `Main.startSave` writes into an
+		 * empty store. Nothing here can reach a state the game cannot.
+		 */
+		private static var saveTotemParts:Array = new Array();  // Array of int
+		private static var saveKeys:Array = new Array();        // Array of int
+		private static var saveSealParts:Array = new Array();   // Array of int, IN ORDER
+
 		/** The loaded tape's declared version — see `autoAdvance`'s counter. */
 		private static var tapeVersion:int = 0;
 
@@ -399,6 +461,10 @@ package
 				ExternalInterface.addCallback("botStatus", botStatus);
 				ExternalInterface.addCallback("botDrain", botDrain);
 				ExternalInterface.addCallback("botReset", botReset);
+				// ⚠ ITS OWN CALLBACK, not a field on `botStatus` — see
+				// `botMobiles`. Every existing caller polls `botStatus` and
+				// is therefore byte-inert past this batch by construction.
+				ExternalInterface.addCallback("botMobiles", botMobiles);
 			}
 			catch (e:Error)
 			{
@@ -410,6 +476,77 @@ package
 			}
 		}
 
+		/**
+		 * Does a `save` block declare anything at all?
+		 *
+		 * The v<6 rejection asks about the ARRAYS and not about the block,
+		 * because `parseTape` normalises a v1..v5 tape into carrying an
+		 * empty block. A `null` array counts as "declares nothing" so an
+		 * author may omit a key they do not use.
+		 */
+		private static function saveBlockDeclaresAnything(b:Object):Boolean
+		{
+			if (b == null) return false;
+			return arrayHasEntries(b.totem_parts)
+				|| arrayHasEntries(b.keys)
+				|| arrayHasEntries(b.seal_parts);
+		}
+
+		private static function arrayHasEntries(a:Object):Boolean
+		{
+			var arr:Array = a as Array;
+			return arr != null && arr.length > 0;
+		}
+
+		/**
+		 * Parse one index list out of a v6 `save` block into `into`.
+		 *
+		 * Returns "" on success or an "error:..." string. `limit` is BOTH
+		 * the exclusive upper bound on an index AND the maximum length,
+		 * because all three arrays are index sets over their own slot count
+		 * and no real save can hold a repeat:
+		 *
+		 *   - `hasTotemPart` / `hasKey` are per-index booleans, so a repeat
+		 *     is a second write of `true`, i.e. a bookkeeping error in the
+		 *     derivation rather than a harmless one;
+		 *   - `hasSealPart` is an ordered LOG whose writer
+		 *     (`SealController.getSealPart`) rejection-samples until it
+		 *     draws an index it does not already hold, so a repeat is a
+		 *     state the game cannot reach.
+		 *
+		 * ⚠ A NEGATIVE INDEX IS NOT "none" here. `hasSealPart`'s own
+		 * EMPTY value is -1, so accepting -1 as an entry would write "this
+		 * slot is empty" into a filled slot and make the array's length
+		 * disagree with its content — the same class of error a negative
+		 * persistence tag would be.
+		 */
+		private static function parseSaveIndices(raw:Object, what:String,
+			limit:int, into:Array):String
+		{
+			if (raw == null) return "";
+			var arr:Array = raw as Array;
+			if (arr == null)
+				return "error:" + what + " must be an array of indices";
+			if (arr.length > limit)
+				return "error:" + what + " has " + arr.length + " entries but only "
+					+ limit + " slots exist";
+			for (var i:int = 0; i < arr.length; i++)
+			{
+				var v:int = int(arr[i]);
+				if (v < 0 || v >= limit)
+					return "error:" + what + "[" + i + "] " + v + " is out of range 0.."
+						+ (limit - 1) + " (a negative index is not \"none\" — "
+						+ "hasSealPart's own empty value is -1)";
+				for (var d:int = 0; d < into.length; d++)
+				{
+					if (int(into[d]) == v)
+						return "error:" + what + "[" + i + "] duplicates index " + v;
+				}
+				into.push(v);
+			}
+			return "";
+		}
+
 		/** Parse and install a tape. Returns "ok" or "error:...". */
 		public static function botLoadTape(json:String):String
 		{
@@ -418,8 +555,9 @@ package
 				var t:Object = JSON.parse(json);
 
 				var version:int = int(t.tape_version);
-				if (version < 1 || version > 5)
-					return "error:tape_version must be 1, 2, 3, 4 or 5, got " + t.tape_version;
+				if (version < 1 || version > 6)
+					return "error:tape_version must be 1, 2, 3, 4, 5 or 6, got "
+						+ t.tape_version;
 				if (t.game != "seedling")
 					return "error:game must be seedling, got " + t.game;
 				if (!(t.noclip is Boolean))
@@ -447,6 +585,9 @@ package
 				var newEquipSlot:Array = new Array();
 				var newPinSound:Boolean = false;
 				var newPinDeadFrames:Boolean = false;
+				var newSaveTotem:Array = new Array();
+				var newSaveKeys:Array = new Array();
+				var newSaveSeals:Array = new Array();
 				var j:int;
 
 				if (version == 1)
@@ -650,6 +791,44 @@ package
 					}
 				}
 
+				// ── the version 6 field: the SAVE-ARRAY boot block ────────
+				// ⚠ VALUE-SCOPED, NOT PRESENCE-SCOPED — the FIFTH time, and
+				// the reason is the one the R0 batch learned the hard way:
+				// `parseTape` is idempotent and NORMALISES, so a parsed
+				// v1..v5 tape arrives over the wire carrying
+				// `save: {totem_parts: [], keys: [], seal_parts: []}`. A
+				// presence check would reject all 98 committed fixtures.
+				//
+				// ⚠ AND THE EMPTINESS TEST IS OVER THE THREE ARRAYS rather
+				// than over the block, for the same reason: the normalised
+				// block is a non-null Object on every tape.
+				var saveBlock:Object = t.save;
+				if (version < 6)
+				{
+					if (saveBlock != null && saveBlockDeclaresAnything(saveBlock))
+						return "error:tape_version " + version + " means save: "
+							+ "{totem_parts: [], keys: [], seal_parts: []} BY "
+							+ "DEFINITION — the build had no such field to read, so "
+							+ "the game would boot with an empty save while the JS "
+							+ "engine honoured the block. Bump tape_version to 6.";
+				}
+				else
+				{
+					if (saveBlock == null || (saveBlock is Array)
+						|| !(saveBlock is Object))
+						return "error:save must be an object {totem_parts, keys, "
+							+ "seal_parts} on a tape_version 6 tape";
+					var se:String = parseSaveIndices(saveBlock.totem_parts,
+						"save.totem_parts", Player.totemParts, newSaveTotem);
+					if (se != "") return se;
+					se = parseSaveIndices(saveBlock.keys,
+						"save.keys", Player.totalKeys, newSaveKeys);
+					if (se != "") return se;
+					se = parseSaveIndices(saveBlock.seal_parts,
+						"save.seal_parts", SealController.SEALS, newSaveSeals);
+					if (se != "") return se;
+				}
+
 				var codes:Array = new Array();
 				var froms:Array = new Array();
 				var tos:Array = new Array();
@@ -697,6 +876,9 @@ package
 				grantsFired = new Array();
 				persistLevel = newPersistLevel;
 				persistTag = newPersistTag;
+				saveTotemParts = newSaveTotem;
+				saveKeys = newSaveKeys;
+				saveSealParts = newSaveSeals;
 				equipTick = newEquipTick;
 				equipSlot = newEquipSlot;
 				equipsFired = new Array();
@@ -807,6 +989,52 @@ package
 				{
 					Game.setPersistence(persistTag[pi], false, persistLevel[pi]);
 				}
+			}
+			// ── R5 slice 23: the SAVE ARRAYS, also BEFORE the world ───────
+			//
+			// Same site and same reason as the clears above: `check()` runs
+			// on a new world's first frame and `BossTotemPart`/`BossKey`
+			// REMOVE THEMSELVES there when the player already holds their
+			// index. A write after `new Game(...)` leaves the pickup
+			// standing for this visit — which for the wand window is worse
+			// than useless, because `Wand.update`'s whole body is gated on
+			// `Player.hasAllTotemParts()` and it would run on the wrong
+			// side of the arrival.
+			//
+			// ⚠ THE RESET IS GATED ON THE TAPE DECLARING SOMETHING, so a
+			// v1..v5 tape takes a byte-identical path to the one it took
+			// before this batch — the R0 byte-inertness gate is what says
+			// so, and the gate is the reason the arm is written this way
+			// rather than resetting unconditionally.
+			//
+			// ⚠ AND THE RESET IS TO THE FRESH-SAVE VALUES, which
+			// `Main.startSave` writes into an empty store: false, false and
+			// **-1** (not 0, and not false — `hasSealPart` is an INT array
+			// whose empty slot is -1, and `hasAllSealParts()` tests
+			// `!= -1`).
+			if (saveTotemParts.length > 0 || saveKeys.length > 0
+				|| saveSealParts.length > 0)
+			{
+				var si:int;
+				for (si = 0; si < Player.totemParts; si++)
+					Main.hasTotemPartSet(si, false);
+				for (si = 0; si < Player.totalKeys; si++)
+					Main.hasKeySet(si, false);
+				for (si = 0; si < SealController.SEALS; si++)
+					Main.hasSealPartSet(si, -1);
+				for (si = 0; si < saveTotemParts.length; si++)
+					Main.hasTotemPartSet(int(saveTotemParts[si]), true);
+				for (si = 0; si < saveKeys.length; si++)
+					Main.hasKeySet(int(saveKeys[si]), true);
+				// ⛔ THE SEAL WRITE IS POSITIONAL: slot `si` gets the seal
+				// IDENTITY the tape declared in position `si`, because
+				// `SealController.getSealPart` fills the first -1 slot with
+				// the identity it drew. Indexing by identity would set
+				// `hasSealPart[identity] = identity` — a different array,
+				// which `hasAllSealParts()` would then read as complete
+				// only if identity 15 happened to be collected.
+				for (si = 0; si < saveSealParts.length; si++)
+					Main.hasSealPartSet(si, int(saveSealParts[si]));
 			}
 			if (bootLevel != Main.level || !atBootPosition())
 			{
@@ -1021,9 +1249,150 @@ package
 				// means `Sfx.length` did not answer — see `Music.pinPlayed`,
 				// which faults rather than carrying on.
 				sound_pin: pinSoundClock ? Music.pinReadout("Swim") : null,
-				pins: { sound: pinSoundClock, dead_frames: pinDeadFrames }
+				pins: { sound: pinSoundClock, dead_frames: pinDeadFrames },
+				// ── R5 slice 23: the SAVE ARRAYS, read back from the GAME ─
+				// Never echoed from the tape. `save.totem_parts` here is
+				// what `Player.hasTotemPart(i)` answers, so a v6 tape's boot
+				// presentation is asserted against the game's own state on
+				// every replay — the same two-sidedness `inventory_slots`
+				// buys for the equip.
+				//
+				// ⛓ AND `seal_parts` IS THE RAW INT ARRAY, slot by slot,
+				// -1 and all. A boolean summary ("has all seals") would be
+				// the one shape that cannot show the identity-slot bug this
+				// field exists to make visible.
+				save: saveReadout()
 			};
 			return JSON.stringify(o);
+		}
+
+		/**
+		 * The three save ARRAYS, live off `Main`'s own accessors.
+		 *
+		 * ⚠ Read through `Player.hasTotemPart` / `Player.hasKey` rather
+		 * than `Main.` where the game's own gates do, so the readout and
+		 * the gate cannot disagree about which accessor is authoritative.
+		 */
+		private static function saveReadout():Object
+		{
+			var i:int;
+			var totem:Array = new Array();
+			for (i = 0; i < Player.totemParts; i++) totem.push(Player.hasTotemPart(i));
+			var keys:Array = new Array();
+			for (i = 0; i < Player.totalKeys; i++) keys.push(Player.hasKey(i));
+			var seals:Array = new Array();
+			for (i = 0; i < SealController.SEALS; i++) seals.push(Main.hasSealPart(i));
+			return {
+				totem_parts: totem,
+				keys: keys,
+				seal_parts: seals,
+				has_all_totem_parts: Player.hasAllTotemParts(),
+				has_all_seal_parts: SealController.hasAllSealParts()
+			};
+		}
+
+		/**
+		 * ── R5 slice 23: THE MOBILE-STATE READOUT ────────────────────────
+		 *
+		 * Every live `Mobile` in the world, as RAW FIELDS. Not a summary,
+		 * not a derived state name, not "is it dead" — the fields the
+		 * classes themselves declare, so a consumer that turns out to need
+		 * a different question can ask it without a second pipeline run.
+		 *
+		 * ⛔ IT IS ITS OWN CALLBACK RATHER THAN A FIELD ON `botStatus`, AND
+		 * THAT IS THE WHOLE DESIGN. `botStatus` is polled to detect the end
+		 * of a tape, on the same thread as the update/render loop whose
+		 * RATIO the dead-frame band rides on (`Game.stepBlackCover`'s
+		 * docblock, and R5 slice 0's 319/321/319/321/319). A world walk
+		 * plus reflection plus a few KB of JSON on every poll is exactly
+		 * the kind of cost that could move that ratio — so it is inert BY
+		 * CONSTRUCTION for every caller that does not ask, which is a
+		 * stronger guarantee than a flag defaulting to off.
+		 *
+		 * ⛓ THE SET IS `Mobile`, NOT `Enemy`, and that is deliberate.
+		 * `Enemy` is what the wall named, but choosing it would be a GUESS
+		 * about which movers a later question is about — and the R5 arc's
+		 * two hardest measurements were about an `IceTurretBlast` (a
+		 * `Mobile`, not an `Enemy`) and a `PushableBlock` (likewise). The
+		 * `Enemy`-only fields ride in a nested object which is `null` for a
+		 * row that is not one: a shape that says "not an Enemy" rather than
+		 * a sentinel value in a real field.
+		 *
+		 * ⛓ `getClass` walks the UPDATE LIST, so the array is in UPDATE
+		 * ORDER — which `World.addUpdate` PREPENDS to, so it is the reverse
+		 * of the loader's order and is exactly the order that decided the
+		 * camera contest in `r5Totem.L43_BOSS_WAKE.updateOrder`.
+		 *
+		 * ⛓ `alpha` IS IN THE ROW BECAUSE `destroy` IS NOT REMOVAL:
+		 * `Mobile.death()` fades the graphic over eleven ticks and the body
+		 * is counted the whole time. The fade is the only field that can
+		 * tell a corpse mid-fade from one that is gone.
+		 */
+		public static function botMobiles():String
+		{
+			var out:Array = new Array();
+			if (FP.world != null)
+			{
+				var v:Vector.<Mobile> = new Vector.<Mobile>();
+				FP.world.getClass(Mobile, v);
+				for each (var m:Mobile in v)
+				{
+					out.push(mobileRow(m));
+				}
+			}
+			return JSON.stringify({ tick: tick, mobiles: out });
+		}
+
+		private static function mobileRow(m:Mobile):Object
+		{
+			var spr:Spritemap = m.graphic as Spritemap;
+			var img:Image = m.graphic as Image;
+			var row:Object = {
+				// `getQualifiedClassName` is what `Entity`'s own
+				// constructor uses, so it is known to work on this runtime.
+				cls: getQualifiedClassName(m),
+				x: m.x, y: m.y,
+				vx: m.v.x, vy: m.v.y,
+				// The AS3 COLLISION TYPE, as a string. R5 slice 20 turned on
+				// this field moving: an IceTurret's `"Solid"` is the
+				// else-arm of `if (currentAnim != "dead")`, so a dead one is
+				// not a wall.
+				type: m.type,
+				destroy: m.destroy,
+				f: m.f,
+				layer: m.layer,
+				visible: m.visible,
+				collidable: m.collidable,
+				width: m.width, height: m.height,
+				origin_x: m.originX, origin_y: m.originY,
+				// null rather than a sentinel when the graphic is not one.
+				anim: (spr == null) ? null : spr.currentAnim,
+				frame: (spr == null) ? null : spr.frame,
+				anim_index: (spr == null) ? null : spr.index,
+				anim_complete: (spr == null) ? null : spr.complete,
+				alpha: (img == null) ? null : img.alpha,
+				angle: (img == null) ? null : img.angle,
+				// The camera gate, which R5 slice 22 found decides WHERE an
+				// IceTurret stands and not only whether it moves.
+				on_screen: m.onScreen(),
+				enemy: null
+			};
+			var e:Enemy = m as Enemy;
+			if (e != null)
+			{
+				row.enemy = {
+					hits: e.hits, hits_max: e.hitsMax, hits_timer: e.hitsTimer,
+					damage: e.damage,
+					can_hit: e.canHit, just_knock: e.justKnock,
+					can_fall_in_pit: e.canFallInPit, fall_in_pit: e.fallInPit,
+					fell: e.fell,
+					hit_by_fire: e.hitByFire, hit_by_dark_stuff: e.hitByDarkStuff,
+					die_in_water: e.dieInWater, die_in_lava: e.dieInLava,
+					active_off_screen: e.activeOffScreen,
+					only_hit_by: e.onlyHitBy, max_force: e.maxForce
+				};
+			}
+			return row;
 		}
 
 		/** The 14 item properties, live off `Player`'s statics. */
@@ -1256,6 +1625,15 @@ package
 			grantLevel = new Array();
 			grantItems = new Array();
 			grantsFired = new Array();
+			// ⚠ FORGOTTEN, NOT UNDONE. `botReset` means "forget the tape",
+			// which is what a fresh page does anyway — it does not roll the
+			// save arrays back, exactly as it does not roll the persistence
+			// clears or the grants back. The next tape's own boot block is
+			// what decides the state, and a v6 tape's reset arm above is
+			// what makes that a pure function of the tape.
+			saveTotemParts = new Array();
+			saveKeys = new Array();
+			saveSealParts = new Array();
 			sawInputRefused = false;
 			deadFrames = 0;
 			autoAdvancePhase = 0;
