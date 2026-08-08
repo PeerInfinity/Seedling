@@ -181,7 +181,7 @@ package Enemies
 				sprLavaBoss.currentAnim == "sweep")
 			{
 				var n:Number = 0.2;
-				sprLavaBoss.scale = 1 + Math.random() * n - n;
+				sprLavaBoss.scale = 1 + Rng.cos() * n - n;
 			}
 			if (!destroy)
 			{

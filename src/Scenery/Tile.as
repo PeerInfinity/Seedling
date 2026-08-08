@@ -94,9 +94,9 @@ package Scenery
 		private var spray:Boolean;	//Whether or not the particles will form at the bottom
 		private var myEdges:BitmapData;
 		
-		private var randVal:Number = Math.random(); //Used to get the starting frame for water and lava, and used general-purpose throughout
-		private var randVal1:Number = Math.random();
-		private var randVal2:Number = Math.random();
+		private var randVal:Number = Rng.cos(); //Used to get the starting frame for water and lava, and used general-purpose throughout
+		private var randVal1:Number = Rng.cos();
+		private var randVal2:Number = Rng.cos();
 		
 		public function Tile(_x:int, _y:int, _t:int=0, _grass:Boolean=true, _g:Graphic=null, _pit:Boolean=false, _continuous:Boolean=false, _spray:Boolean=true) 
 		{
@@ -306,7 +306,7 @@ package Scenery
 						}
 						if (spray && _em)
 						{
-							_em.emit("spray", x - originX - _emOriginX + width * Math.random(), y - originY + height - _emOriginY + Math.random());
+							_em.emit("spray", x - originX - _emOriginX + width * Rng.cos(), y - originY + height - _emOriginY + Rng.cos());
 							_em.update();
 						}
 						break;

@@ -34,7 +34,7 @@ package Puzzlements
 			useTimer = _timer;
 			
 			sprWhirlpool.centerOO();
-			sprWhirlpool.angle = Math.random() * 360;
+			sprWhirlpool.angle = Rng.cos() * 360;
 			sprWhirlpool.alpha = maxAlpha;
 			setHitbox(sprWhirlpool.width, sprWhirlpool.height, sprWhirlpool.originX, sprWhirlpool.originY);
 			

@@ -20,6 +20,8 @@ package Enemies
 		private var retaliation:Boolean = false;
 		private var stabbing:Boolean = false;
 		private var activated:Boolean = false;
+		/** The arming flag, for the BOT's readout only (R6 slice 6a). */
+		public function get isActivated():Boolean { return activated; }
 		
 		private const swingForce:Number = 6;
 		private const swingTimeMax:int = 120;

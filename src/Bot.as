@@ -8,6 +8,8 @@ package
 	import net.flashpunk.graphics.Spritemap;
 	import NPCs.Help;
 	import Enemies.Enemy;
+	import Enemies.ShieldBoss;
+	import Scenery.Pod;
 
 	/**
 	 * Bot — a generic, data-driven INPUT TAPE INTERPRETER compiled into the
@@ -131,6 +133,41 @@ package
 		 */
 		public static var pinSoundClock:Boolean = false;
 		public static var pinDeadFrames:Boolean = false;
+
+		/**
+		 * ── The version-7 block: the RNG STATE AS TAPE DATA ───────────────
+		 *
+		 * `Math.random()` is one global LFSR (see `Rng`), so what it returns
+		 * inside a recorded window depends on how many draws the page has
+		 * made since it loaded — every `Tile` built, every sound index
+		 * rolled, every frame of camera shake, in the title world as much as
+		 * this one. A tape that has to say what the Owl's rocks do cannot
+		 * inherit that number; it has to DECLARE it, the way it already
+		 * declares its boot level and its save arrays.
+		 *
+		 * `rngSeed` 0 means "inherit the page's stream" — the pre-batch
+		 * behaviour, and what every v1..v6 tape normalises to, so those
+		 * tapes never reach the reset call at all.
+		 */
+		public static var rngSeed:Number = 0;
+		public static var rngSplit:Boolean = false;
+
+		/**
+		 * ── R6 slice 6a: the slash's LIVE dispatch counters ───────────────
+		 *
+		 * One press is FIVE hit tests (`slashDelayMax` is 0, so `slash()`
+		 * dispatches on every tick the animation is up), and five rungs of
+		 * the ladder modelled ONE because every arm they reached happened to
+		 * be idempotent. The ShieldBoss was the first that was not, and the
+		 * miscount could only be seen 13 ticks later as a knockback in a
+		 * recording.
+		 *
+		 * `slashTests` counts the dispatches, `slashHits` the ones that
+		 * reached `genericHit`. Instrument only: nothing reads them but
+		 * `botStatus`.
+		 */
+		public static var slashTests:int = 0;
+		public static var slashHits:int = 0;
 
 		public static var noWater:Boolean = false;      // state 1
 		public static var noPit:Boolean = false;        // state 6
@@ -465,6 +502,7 @@ package
 				// `botMobiles`. Every existing caller polls `botStatus` and
 				// is therefore byte-inert past this batch by construction.
 				ExternalInterface.addCallback("botMobiles", botMobiles);
+				ExternalInterface.addCallback("botRngProbe", botRngProbe);
 			}
 			catch (e:Error)
 			{
@@ -555,8 +593,8 @@ package
 				var t:Object = JSON.parse(json);
 
 				var version:int = int(t.tape_version);
-				if (version < 1 || version > 6)
-					return "error:tape_version must be 1, 2, 3, 4, 5 or 6, got "
+				if (version < 1 || version > 7)
+					return "error:tape_version must be 1, 2, 3, 4, 5, 6 or 7, got "
 						+ t.tape_version;
 				if (t.game != "seedling")
 					return "error:game must be seedling, got " + t.game;
@@ -829,6 +867,75 @@ package
 					if (se != "") return se;
 				}
 
+				// ── the version 7 block: the RNG state ────────────────────
+				// ⚠ VALUE-SCOPED, NOT PRESENCE-SCOPED — the SIXTH time, and
+				// the reason has not moved since the R0 batch: `parseTape` is
+				// idempotent and NORMALISES, so a parsed v1..v6 tape arrives
+				// over the wire carrying `rng: {seed: 0, split: false}`. A
+				// presence check would reject all 108 committed fixtures.
+				//
+				// ⛓ `seed: 0` IS THE "declares nothing" VALUE and it is not
+				// a state: the LFSR never enters 0 (an odd value xors to a
+				// nonzero mask, an even one shifts down through odd), so 0 is
+				// free to mean "inherit the page's stream" — which is what
+				// every tape recorded before this batch did.
+				var rngBlock:Object = t.rng;
+				var newRngSeed:Number = 0;
+				var newRngSplit:Boolean = false;
+				if (version < 7)
+				{
+					if (rngBlock != null
+						&& (Number(rngBlock.seed) != 0 || rngBlock.split == true))
+						return "error:tape_version " + version + " means rng: "
+							+ "{seed: 0, split: false} BY DEFINITION — the build "
+							+ "had no such field to read, so the game would run on "
+							+ "the page's inherited stream while the JS engine "
+							+ "honoured the block. Bump tape_version to 7.";
+				}
+				else
+				{
+					if (rngBlock == null || (rngBlock is Array)
+						|| !(rngBlock is Object))
+						return "error:rng must be an object {seed, split} on a "
+							+ "tape_version 7 tape";
+					if (!(rngBlock.split is Boolean))
+						return "error:rng.split must be a boolean on a "
+							+ "tape_version 7 tape";
+					newRngSplit = rngBlock.split;
+					// ⛔ THE BOUND IS 2^31 - 1 AND THE TRANSPORT IS HALF THE
+					// REASON. The n=31 tap is 0x48000000, whose top bit is
+					// clear, so the orbit lives entirely in [1, 2^31) — a
+					// larger seed is not a state the game can be in. AND
+					// `JSON.parse` here coerces an integral Number to int32,
+					// so a tape declaring 2147483648 arrives as
+					// -2147483648: the negative arm below is that value, not
+					// an author's typo, and it says so.
+					var seedRaw:Number = Number(rngBlock.seed);
+					if (seedRaw < 0)
+						return "error:rng.seed arrived as " + seedRaw + " — a "
+							+ "negative seed is impossible to declare, so this is "
+							+ "JSON.parse's int32 coercion of a value above "
+							+ "2147483647. The orbit only reaches 2^31 - 1; "
+							+ "declare a seed in 1..2147483647.";
+					if (!(seedRaw == seedRaw) || seedRaw != Math.floor(seedRaw)
+						|| seedRaw > 2147483647)
+						return "error:rng.seed must be an integer in 0..2147483647, "
+							+ "got " + rngBlock.seed;
+					newRngSeed = seedRaw;
+					// ⛔ A DECLARED SEED WITH NO HOOKS IS A REFUSAL, NOT A
+					// WARNING. Without the runtime hooks the reset silently
+					// does nothing and the tape runs on whatever the page had
+					// — a recording that looks like every other one and is
+					// about a different stream position. Same for the split:
+					// `Rng.cos()` would keep falling through to
+					// `Math.random()` and the tape's whole claim would be
+					// that the split had no effect.
+					if ((newRngSeed != 0 || newRngSplit) && !Rng.available)
+						return "error:rng declares seed " + newRngSeed + "/split "
+							+ newRngSplit + " but this build has no swfmodern.Rng "
+							+ "hooks — the declaration would be silently ignored";
+				}
+
 				var codes:Array = new Array();
 				var froms:Array = new Array();
 				var tos:Array = new Array();
@@ -886,6 +993,8 @@ package
 				pendEquipTick = new Array();
 				pinSoundClock = newPinSound;
 				pinDeadFrames = newPinDeadFrames;
+				rngSeed = newRngSeed;
+				rngSplit = newRngSplit;
 				tapeVersion = version;
 
 				loaded = true;
@@ -1040,10 +1149,44 @@ package
 			{
 				FP.world = new Game(bootLevel, bootX, bootY);
 			}
+			// ── R6 slice 6a: the RNG reset, AFTER the world is built ──────
+			//
+			// ⛓⛓⛓ THE POSITION OF THIS LINE IS THE WHOLE POINT. `new Game`
+			// runs its constructor synchronously right above — three
+			// `Math.random()` draws for every Tile it builds, one per Enemy —
+			// and the swap itself is deferred to end-of-tick. Resetting BELOW
+			// it means the model owes nothing for the world build, and
+			// nothing for the page's whole history before it: the stream
+			// starts at a number the TAPE declared. Resetting above it would
+			// have handed the model a tile census to count instead.
+			//
+			// ⚠ Both writes are gated on the tape declaring something, so a
+			// v1..v6 tape takes a byte-identical path to the one it took
+			// before this batch — the same shape as the persistence and save
+			// resets above, and for the same reason. `Rng.split` is assigned
+			// unconditionally because it is a STATIC that outlives a tape:
+			// leaving a previous tape's true behind would be the order
+			// dependence the declaration exists to remove. Assigning false
+			// is inert.
+			//
+			// ⛓ The COSMETIC stream is reset to 0 — the BUILD's own boot
+			// seed — and not to the tape's. Deliberately not the same
+			// number: two generators started at the same state return the
+			// same first value, which is exactly the coincidence that would
+			// let a MISROUTED draw (a gameplay site accidentally on the
+			// cosmetic stream) look correct on the tick that matters.
+			Rng.split = rngSplit;
+			if (rngSeed != 0) Rng.setState(rngSeed);
+			if (rngSplit) Rng.setCosmeticState(0);
 			armed = true;
 			finished = false;
 			errorText = "";
 			tick = 0;
+			// Per-WINDOW, like `tick` — a director boundary starts the count
+			// again, which is what a claim about "this window's presses" is
+			// about.
+			slashTests = 0;
+			slashHits = 0;
 			sawInputRefused = false;
 			deadFrames = 0;
 			autoAdvancePhase = 0;
@@ -1261,7 +1404,32 @@ package
 				// -1 and all. A boolean summary ("has all seals") would be
 				// the one shape that cannot show the identity-slot bug this
 				// field exists to make visible.
-				save: saveReadout()
+				save: saveReadout(),
+				// ── R6 slice 6a ──────────────────────────────────────────
+				// The stream's own position, read live off the generator.
+				// `seed`/`split` are echoed from the tape and the two STATE
+				// fields are not — so a replay asserts that the declared
+				// reset actually landed, rather than that the tape was
+				// parsed. `-1` means a build without the hooks, which a
+				// seeded tape refuses at load rather than reaching here.
+				rng: {
+					state: Rng.state,
+					cosmetic_state: Rng.cosmeticState,
+					seed: rngSeed,
+					split: rngSplit,
+					hooks: Rng.available
+				},
+				// The credits state, read DIRECTLY. `R6_MENU_WRITERS`
+				// eliminates four writers to make `menu === true` a sound
+				// witness of the ending; this is the number that witness was
+				// standing in for (2 = the credits).
+				menu_state: Game.menuStateReadout,
+				// One press is FIVE hit tests. `tests` counts the
+				// dispatches, `hits` the ones that reached `genericHit` — so
+				// a model claiming "the first hit is swallowed" is checked
+				// against the count rather than against a knockback 13 ticks
+				// downstream.
+				slash: { tests: slashTests, hits: slashHits }
 			};
 			return JSON.stringify(o);
 		}
@@ -1331,6 +1499,7 @@ package
 		public static function botMobiles():String
 		{
 			var out:Array = new Array();
+			var pods:Array = new Array();
 			if (FP.world != null)
 			{
 				var v:Vector.<Mobile> = new Vector.<Mobile>();
@@ -1339,8 +1508,33 @@ package
 				{
 					out.push(mobileRow(m));
 				}
+				// ── R6 slice 6a: the PODS ────────────────────────────────
+				//
+				// Their own list because a `Pod` is NOT a `Mobile` — it is
+				// Scenery with no velocity — and the roster above walks
+				// exactly that class. Slice 0 recorded the absence as a
+				// wanted-not-wall; it is wanted because the Owl's whole
+				// phase loop is driven by which pod is open, and a window
+				// that cannot see the pods can only infer the phase from the
+				// boss's position.
+				//
+				// `anim` and `frame` rather than `open` alone: `open` is a
+				// derived boolean (`"open" || "opened"`) and the 22-update
+				// open/close animations are what a tick-exact schedule needs.
+				var pv:Vector.<Pod> = new Vector.<Pod>();
+				FP.world.getClass(Pod, pv);
+				for each (var pd:Pod in pv)
+				{
+					pods.push({
+						x: pd.x, y: pd.y,
+						open: pd.open,
+						anim: pd.anim,
+						frame: pd.frame,
+						type: pd.type
+					});
+				}
 			}
-			return JSON.stringify({ tick: tick, mobiles: out });
+			return JSON.stringify({ tick: tick, mobiles: out, pods: pods });
 		}
 
 		private static function mobileRow(m:Mobile):Object
@@ -1389,7 +1583,16 @@ package
 					hit_by_fire: e.hitByFire, hit_by_dark_stuff: e.hitByDarkStuff,
 					die_in_water: e.dieInWater, die_in_lava: e.dieInLava,
 					active_off_screen: e.activeOffScreen,
-					only_hit_by: e.onlyHitBy, max_force: e.maxForce
+					only_hit_by: e.onlyHitBy, max_force: e.maxForce,
+					// ── R6 slice 6a ──────────────────────────────────────
+					// `null` for every enemy but the one that has the field.
+					// The ShieldBoss's arming is a PRIVATE var and slice 5
+					// could only check it by its consequence — which is how
+					// "the first hit of every entry is swallowed" survived
+					// being wrong for a whole slice (the arming press armed
+					// him on hit test 1 and made him retaliate on test 2).
+					activated: (m is ShieldBoss)
+						? (m as ShieldBoss).isActivated : null
 				};
 			}
 			return row;
@@ -1592,6 +1795,70 @@ package
 			return JSON.stringify({ ticks: ticks, transitions: [] });
 		}
 
+		/**
+		 * Draw N values from a stream at a declared seed — THE ORACLE for
+		 * the JS transcription of the generator.
+		 *
+		 * `{"seed": <uint32>, "count": <n>, "cosmetic": <bool>}` in, a JSON
+		 * array of that many `Math.random()`-shaped Numbers out.
+		 *
+		 * ⛓⛓ THE GAME IS THE ONLY ORACLE. A JS `rng.js` checked against a
+		 * hand-copied vector table would be checking the transcription
+		 * against itself; this draws the expected stream from the same
+		 * generator the game draws from, through the same `Math.random()`
+		 * the game calls.
+		 *
+		 * ⚠ AND IT PUTS THE STATE BACK. Sampling a stream advances it, so a
+		 * probe run mid-window would silently move every draw after it. The
+		 * write hook is what makes this measurable rather than destructive —
+		 * which is the second reason it exists, beyond the reset.
+		 */
+		public static function botRngProbe(json:String):String
+		{
+			try
+			{
+				if (!Rng.available)
+					return "error:this build has no swfmodern.Rng hooks";
+				var q:Object = JSON.parse(json);
+				var count:int = int(q.count);
+				if (count < 0 || count > 4096)
+					return "error:count must be in 0..4096, got " + q.count;
+				var cosmetic:Boolean = (q.cosmetic == true);
+				var seed:Number = Number(q.seed);
+				if (!(seed == seed) || seed != Math.floor(seed)
+					|| seed < 0 || seed > 2147483647)
+					return "error:seed must be an integer in 0..2147483647, got "
+						+ q.seed + " (a negative here is JSON.parse's int32 "
+						+ "coercion of a value above 2147483647)";
+				var before:Number = cosmetic ? Rng.cosmeticState : Rng.state;
+				if (cosmetic) Rng.setCosmeticState(seed);
+				else Rng.setState(seed);
+				var draws:Array = new Array();
+				var states:Array = new Array();
+				for (var i:int = 0; i < count; i++)
+				{
+					// ⚠ The GAMEPLAY arm calls `Math.random()` itself, not a
+					// hook that happens to share the generator: the claim
+					// being checked is about the function the game calls.
+					draws.push(cosmetic ? Rng.cosDraw() : Math.random());
+					states.push(cosmetic ? Rng.cosmeticState : Rng.state);
+				}
+				if (cosmetic) Rng.setCosmeticState(before);
+				else Rng.setState(before);
+				return JSON.stringify({
+					seed: seed, count: count, cosmetic: cosmetic,
+					draws: draws, states: states, restored: before
+				});
+			}
+			catch (e:Error)
+			{
+				return "error:" + e.message;
+			}
+			// Unreachable — mxmlc's flow analysis does not credit returns
+			// inside try/catch. Same shape as `botLoadTape`.
+			return "error:unreachable";
+		}
+
 		/** Disarm and forget the tape and the buffer. */
 		public static function botReset():String
 		{
@@ -1619,6 +1886,18 @@ package
 			pinSoundClock = false;
 			pinDeadFrames = false;
 			Music.pinReset();
+			// ⚠ FORGOTTEN, NOT UNDONE — the `saveTotemParts` rule below,
+			// applied to the stream. The declaration is dropped and
+			// `Rng.split` goes back off (a static outliving the tape is the
+			// order dependence the v7 block exists to remove), but the
+			// generator's STATE is left exactly where the tape left it: a
+			// reset is a rewind the game itself can never do, and the next
+			// tape's own `rng.seed` is what decides where it starts.
+			rngSeed = 0;
+			rngSplit = false;
+			Rng.split = false;
+			slashTests = 0;
+			slashHits = 0;
 			spanCode = new Array();
 			spanFrom = new Array();
 			spanTo = new Array();

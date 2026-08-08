@@ -583,6 +583,15 @@ package
 		private const menuStates:int = 4;
 		private const menuTweenTime:int = 10;
 		private static var menuState:int = 0;
+		/**
+		 * The menu page, for the BOT's readout only (R6 slice 6a).
+		 *
+		 * A getter rather than making the field public: nothing in the
+		 * game may write it from outside, and 2 is the credits — the
+		 * number `R6_MENU_WRITERS`'s four-writer elimination was standing
+		 * in for while it was unreadable.
+		 */
+		public static function get menuStateReadout():int { return menuState; }
 		private static var menuTween:Tween;
 		private static var menuScroll:Number = 0;
 		private var menuMaxWidth:Object = { "controls": { "left":0, "right":0 }, "credits":0 };
@@ -895,7 +904,7 @@ package
 					timeRate = Math.max(timeRate - 0.0025, 0);
 					if (classCount(DustParticle) <= 100 && timeRate > 0)
 					{
-						FP.world.add(new DustParticle(FP.camera.x, Math.random() * FP.screen.height + FP.camera.y));
+						FP.world.add(new DustParticle(FP.camera.x, Rng.cos() * FP.screen.height + FP.camera.y));
 					}
 					
 					if (cutsceneTimer[0][0] > 0)
@@ -967,11 +976,11 @@ package
 			if (raining)
 			{
 				const rainingHeavinessMax:int = 100;
-				if (!Math.floor(Math.random() * (rainingHeavinessMax - rainingHeaviness)))
+				if (!Math.floor(Rng.cos() * (rainingHeavinessMax - rainingHeaviness)))
 				{
 					var rainingRectTemp:Rectangle = rainingRect.intersection(new Rectangle(FP.camera.x, FP.camera.y, FP.screen.width, FP.screen.height));
 					if(rainingRectTemp)
-						FP.world.add(new Droplet(rainingRectTemp.x + Math.random() * rainingRectTemp.width, rainingRectTemp.y + rainingRectTemp.height * Math.random(), rainingHeight, rainingColor));
+						FP.world.add(new Droplet(rainingRectTemp.x + Rng.cos() * rainingRectTemp.width, rainingRectTemp.y + rainingRectTemp.height * Rng.cos(), rainingHeight, rainingColor));
 				}
 			}
 			if (canInventory())

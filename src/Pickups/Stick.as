@@ -16,7 +16,7 @@ package Pickups
 		{
 			super(_x, _y, sprStick, _v);
 			sprStick.centerOO();
-			sprStick.angle = Math.random() * 360;
+			sprStick.angle = Rng.cos() * 360;
 			type = "Stick";
 			setHitbox(4, 4, 2, 2);
 			

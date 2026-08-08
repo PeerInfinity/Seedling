@@ -99,6 +99,11 @@ package Scenery
 				sprPod.play("close");
 			}
 		}
+		/** The animation name, for the BOT's readout only (R6 slice 6a). */
+		public function get anim():String { return sprPod.currentAnim; }
+		/** The animation frame, for the BOT's readout only (R6 slice 6a). */
+		public function get frame():int { return sprPod.frame; }
+		
 		public function get open():Boolean
 		{
 			return sprPod.currentAnim == "open" || sprPod.currentAnim == "opened";

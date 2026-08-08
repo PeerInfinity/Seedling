@@ -9,12 +9,12 @@ package
 	 */
 	public class DustParticle extends Entity
 	{
-		private const w:int = Math.random() * 3 + 1;
+		private const w:int = Rng.cos() * 3 + 1;
 		private const h:int = w;
-		private const c:uint = FP.getColorRGB(Math.random() * 64 + 192, Math.random() * 64 + 192, 0);
-		private var a:Number = Math.random() / 2 + 0.5;
+		private const c:uint = FP.getColorRGB(Rng.cos() * 64 + 192, Rng.cos() * 64 + 192, 0);
+		private var a:Number = Rng.cos() / 2 + 0.5;
 		
-		private const m:Number = Math.random() * 2 + 1;
+		private const m:Number = Rng.cos() * 2 + 1;
 		private var startT:int;
 		private var startY:int;
 		

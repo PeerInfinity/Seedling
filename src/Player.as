@@ -902,6 +902,7 @@ package
 			else if(slashing)
 			{
 				slashDelay = slashDelayMax;
+				Bot.slashTests++;   // R6 slice 6a: one press is FIVE of these
 				var v:Vector.<Entity> = new Vector.<Entity>();
 				for (var i:int = 0; i < hitables.length; i++)
 				{
@@ -919,6 +920,7 @@ package
 							{
 								spearDirection = direction;
 							}
+							Bot.slashHits++;   // R6 slice 6a: the ones that LAND
 							genericHit(v[i], hasGhostSword ? "Spear" : "Sword", swordForce, hasGhostSword ? ghostSwordDamage : (hasDarkSword ? darkSwordDamage : swordDamage));
 						}
 					}

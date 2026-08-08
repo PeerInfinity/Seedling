@@ -670,7 +670,7 @@ package
 			{
 				do
 				{
-					cplayIndex = Math.floor(Math.random() * sounds[strInd].length)
+					cplayIndex = Math.floor(Rng.cos() * sounds[strInd].length)
 				}
 				while (cplayIndex == currentIndex && sounds[strInd].length > 1 &&  currentSet == strInd)
 			}

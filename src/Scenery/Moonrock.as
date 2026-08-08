@@ -190,11 +190,11 @@ package Scenery
 			Draw.rect(x + sprMoonrock.width / 2 - Tile.w / 2 - m, y + sprMoonrock.height / 2 - m, Tile.w, fallTo - y + Tile.h / 2, 0xFFFFFF, 0.5);
 			for (var i:int = 0; i < 20; i++)
 			{
-				const c:uint = FP.getColorRGB(192 + 64 * Math.random(), 192 + 64 * Math.random(), 192 * Math.random());
-				const dx:int = Tile.w * 2 * Math.random() - Tile.w; //The distance each beam can be from the center
-				const dy:int = Tile.h * 2 * Math.random() - Tile.h;
-				const alpha:Number = Math.random() / 2;
-				const thick:Number = Math.random() * 3 + 0.5;
+				const c:uint = FP.getColorRGB(192 + 64 * Rng.cos(), 192 + 64 * Rng.cos(), 192 * Rng.cos());
+				const dx:int = Tile.w * 2 * Rng.cos() - Tile.w; //The distance each beam can be from the center
+				const dy:int = Tile.h * 2 * Rng.cos() - Tile.h;
+				const alpha:Number = Rng.cos() / 2;
+				const thick:Number = Rng.cos() * 3 + 0.5;
 				Draw.linePlus(x + sprMoonrock.width/2 + dx - m, y + sprMoonrock.height/2 - m, x + sprMoonrock.width/2 + dx - m, fallTo + sprMoonrock.height/2 + dy - m, c, alpha, thick);
 			}
 		}

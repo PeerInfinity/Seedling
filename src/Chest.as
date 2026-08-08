@@ -19,7 +19,7 @@ package
 		
 		private const openTimerMax:int = 60;
 		private var openTimer:int = 0;
-		private var coins:int = Math.floor(Math.random() * 4 + 8);
+		private var coins:int = Math.floor(Rng.cos() * 4 + 8);
 		private var tag:int;
 		
 		public function Chest(_x:int, _y:int, _tag:int=-1) 

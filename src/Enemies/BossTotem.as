@@ -584,8 +584,8 @@ package Enemies
 			}
 			const val:Number = activationStage;
 			const rumble:Number = (1 - Math.cos(rumblingTime / rumblingTimeMax * 2 * Math.PI)) / 2;
-			const rumbleRandAngle:Number = Math.random() * rumble * rumbleAngleMax;
-			const rumbleRandDist:Number =  (Math.random() - 0.5) * rumbleDistMax * rumble;
+			const rumbleRandAngle:Number = Rng.cos() * rumble * rumbleAngleMax;
+			const rumbleRandDist:Number =  (Rng.cos() - 0.5) * rumbleDistMax * rumble;
 			armsPos.x = (armsPos.x - defArmsPos.x) * val + defArmsPos.x + rumbleRandDist;
 			armsPos.y = (armsPos.y - defArmsPos.y) * val + defArmsPos.y + rumbleRandDist;
 			armsAng = (armsAng - defArmsAng) * val + defArmsAng + rumbleRandAngle;

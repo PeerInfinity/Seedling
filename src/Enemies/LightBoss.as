@@ -64,7 +64,7 @@ package Enemies
 				v.y += (goto.y - y) / divisor;
 			}
 			
-			if (!Math.floor(Math.random() * 90))
+			if (!Math.floor(Rng.cos() * 90))
 			{
 				Music.playSound("Boss 6 Move");
 			}

@@ -9,7 +9,7 @@ package Scenery
 	 */
 	public class Grass extends Entity
 	{
-		private var startIndex:int = Math.floor(Math.random() * (Game.sprGrass.frameCount - 1) / 2) * 2 + 1;
+		private var startIndex:int = Math.floor(Rng.cos() * (Game.sprGrass.frameCount - 1) / 2) * 2 + 1;
 		private var cutGrass:Boolean = false;
 		
 		private var color:uint = 0xFFFFFF;

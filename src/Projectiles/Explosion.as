@@ -36,7 +36,7 @@ package Projectiles
 			
 			type = "Explosion";
 			sprExplosion.scale = radius * 2 / sprExplosion.width; //Assume that the explosion sprite is circular.
-			sprExplosion.angle = Math.random() * 360;
+			sprExplosion.angle = Rng.cos() * 360;
 			radius *= radiusCoeff; //radius now represents the hitable area of the explosion.
 			
 			layer = -FP.height;
