@@ -492,6 +492,60 @@ package
 		private static var latchWhy:String = "";
 
 		/**
+		 * ── R7 SLICE 2b: THE `Game.begin()`-ENTRY LATCH ──────────────────
+		 *
+		 * ⚖ §6.2's ruled option (a), and it exists because the terminal
+		 * latch above answers a slightly different question than a SEGMENT
+		 * BOOT asks.
+		 *
+		 * `botStart` writes `Rng.setState` BEFORE the build — "the declared
+		 * seed is the build's first number" (`:1689` and the docblock there)
+		 * — because the build is deferred into `Game.begin()`'s `loadlevel`
+		 * (`Game.as:784`; the constructor builds nothing, trap 112). So a
+		 * tape's declared stream is a PRE-BUILD quantity while `latchSeam`'s
+		 * is a POST-build one, and they are not the same kind of number.
+		 *
+		 * ⛓ SLICE 2 MEASURED THE WHOLE DIFFERENCE AND IT IS ONE BUILD. A
+		 * segment boundary at an arrival duplicates exactly one level build
+		 * and one level fade: the contiguous run builds the arrival level
+		 * once, the segmented pair builds it twice. For L94 that is **1562
+		 * gameplay draws and 21 dead frames**, measured independently and
+		 * with zero residue (`probe-seedling-build-cost.mjs`; 409 tiles x 3
+		 * draws = 1227 of the 1562, the other 335 the 33 entity ctors). The
+		 * observation STREAM was identical across the seam in all three
+		 * probe arms, 90/90 ticks — the seam was never wrong about the walk,
+		 * only about which side of a build its numbers were read on.
+		 *
+		 * ⇒ this latches the four stream-position fields at the ENTRY of
+		 * every `Game.begin()`. The successor segment declares THESE, its
+		 * own build consumes the same 1562 draws, and the seam closes
+		 * EXACTLY instead of closing to a declared offset.
+		 *
+		 * ⛔ NO DRAW, THE SAME REFUSAL AS `latchSeam`. Four field reads and
+		 * one `Object`: no `Math.random()`, no `Rng.cos()`, nothing
+		 * constructed whose ctor draws. `Rng.state`/`Rng.cosmeticState` are
+		 * hook READS and `FP.randomSeedLive` is a plain getter on `_seed`.
+		 * A latch that drew would move the very position it reports, and
+		 * this one is read at the exact instant the boot side reproduces.
+		 *
+		 * ⛔ AND IT IS CLEARED BY `clearLatch`, WHICH IS WHY A REUSED WORLD
+		 * READS UNCLAIMED RATHER THAN STALE. `botStart` skips `new Game`
+		 * when the boot already matches the current level and position
+		 * (`:1638`), so that boot runs no `begin()` and takes no build
+		 * draws. If this static kept a previous tape's entry it would serve
+		 * a plausible number for a build that never happened; cleared, the
+		 * row is absent and the seam checker says UNCLAIMED — the honest
+		 * answer, and the one a consumer can act on.
+		 *
+		 * ⚠ `beginLevel` rides along so a consumer can prove WHICH world's
+		 * entry this is. A tape that crosses three levels overwrites it
+		 * twice and the last one is the arrival's, which is the one a seam
+		 * is about — but "the last one" is a claim, and the level makes it
+		 * checkable.
+		 */
+		private static var beginEntry:Object = null;
+
+		/**
 		 * ── R7: THE `pressed`/`released` ECHO (R6 debt 4) ────────────────
 		 *
 		 * ⚠ ALSO A LATCH, for the trap-111 reason one readout over. The
@@ -2111,12 +2165,52 @@ package
 			latchWhy = why;
 		}
 
-		/** Forget the latch. `botLoadTape`/`botReset` only — never a disarm. */
+		/**
+		 * ⛓ THE STREAM POSITION AT `Game.begin()` ENTRY — R7 slice 2b.
+		 *
+		 * Called as `begin()`'s FIRST statement (`Game.as:684`), above
+		 * `super.begin()` and far above the `loadlevel` that is the build.
+		 * See `beginEntry`'s docblock for why the terminal latch cannot
+		 * answer this and what the difference cost.
+		 *
+		 * ⛔ FOUR READS AND AN `Object`. No draw, nothing constructed that
+		 * draws. Ungated on purpose: the page's own boot loads a level too
+		 * (`Main.as:50-51`), and a latch that only armed itself for a tape
+		 * would have nothing to say about the one boot every segment chain
+		 * starts from.
+		 *
+		 * @param _level the world's own `level`, so a consumer can prove
+		 *               which entry this was rather than trusting "the last"
+		 */
+		public static function latchBeginEntry(_level:int):void
+		{
+			var o:Object = new Object();
+			o["begin.level"] = _level;
+			o["begin.tick"] = tick;
+			o["rng.gameplay"] = Rng.state;
+			o["rng.cosmetic"] = Rng.cosmeticState;
+			o["fp.seed"] = FP.randomSeedLive;
+			o["save.time"] = Main.time;
+			beginEntry = o;
+		}
+
+		/**
+		 * Forget both latches. `botLoadTape`/`botReset` only — never a
+		 * disarm.
+		 *
+		 * ⛔ `beginEntry` IS CLEARED HERE TOO, AND THAT IS LOAD-BEARING. It
+		 * is a page-lifetime running record, so without this a boot that
+		 * REUSES the current world (`:1638`, no `new Game`, no `begin()`, no
+		 * build draws) would serve the PREVIOUS tape's entry — a plausible
+		 * number for a build that never ran. Cleared, that boot has no entry
+		 * row and the seam reads UNCLAIMED.
+		 */
 		private static function clearLatch():void
 		{
 			latched = null;
 			latchPartial = false;
 			latchWhy = "";
+			beginEntry = null;
 		}
 
 		/**
@@ -2126,6 +2220,14 @@ package
 		 * polled on the update/render thread whose RATIO the dead-frame band
 		 * rides on, and this block is a few KB. Inert by construction for
 		 * every caller that does not ask.
+		 *
+		 * ⛓ R7 slice 2b: `beginEntry` rides BESIDE `seam` rather than inside
+		 * it. Two blocks because they answer two questions — `seam` is where
+		 * the run ENDED (the ending-state claim compares two of those), and
+		 * `beginEntry` is what a successor must DECLARE to reproduce it. A
+		 * single flat block would have forced one of the two consumers to
+		 * re-derive the other's number, which is the drift trap 86 is about.
+		 * Null when nothing loaded a level since the last `clearLatch`.
 		 */
 		public static function botSeam():String
 		{
@@ -2133,7 +2235,8 @@ package
 				latched: latched != null,
 				partial: latchPartial,
 				why: latchWhy,
-				seam: latched
+				seam: latched,
+				beginEntry: beginEntry
 			});
 		}
 

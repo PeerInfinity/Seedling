@@ -681,6 +681,20 @@ package
 		}
 		override public function begin():void
 		{
+			// ── R7 SLICE 2b: THE ENTRY LATCH, AND IT IS THE FIRST LINE ────
+			//
+			// ⛔ THE POSITION IS THE WHOLE POINT. Everything below this line
+			// that matters to a stream position is the BUILD — `loadlevel`
+			// runs ~100 lines down and costs three `Rng.cos()` draws per Tile
+			// plus every entity constructor (1562 for L94, measured). A boot
+			// applies its declared seed BEFORE `begin()` runs at all
+			// (`Bot.as:1689`), so THIS instant is the one instant where a
+			// contiguous arrival and a booted segment hold the same stream
+			// position — which is what makes a seam close exactly instead of
+			// closing to a declared offset. See `Bot.beginEntry`.
+			//
+			// ⛔ It takes no draw, so it cannot move what it reports.
+			Bot.latchBeginEntry(level);
 			/*if (Main.hasSealPart(SealController.SEALS - 2) == -1)
 			{
 				for (var i:int = 0; i < 15; i++)
