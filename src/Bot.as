@@ -6,6 +6,7 @@ package
 	import net.flashpunk.FP;
 	import net.flashpunk.graphics.Image;
 	import net.flashpunk.graphics.Spritemap;
+	import net.flashpunk.utils.Input;
 	import NPCs.Help;
 	import Enemies.Enemy;
 	import Enemies.ShieldBoss;
@@ -219,6 +220,14 @@ package
 		{
 			if (errorText != "") return;
 			errorText = why;
+			// ⚠ R7: A FAILURE DISARM LATCHES WHAT IT CAN AND SAYS SO. The
+			// signature is real state and worth reporting — a pin that broke
+			// mid-run is exactly when a human wants to see where the streams
+			// were — but the tape did not reach its declared end, so the seam
+			// is UNCLAIMED by construction and the checker must never read it
+			// as green. Marking it beats omitting it: an absent latch and a
+			// broken one are different facts.
+			latchSeam(true, "pin fault: " + why);
 			armed = false;
 			finished = true;
 		}
@@ -400,6 +409,107 @@ package
 		private static var saveKeys:Array = new Array();        // Array of int
 		private static var saveSealParts:Array = new Array();   // Array of int, IN ORDER
 
+		/**
+		 * ── R7, tape version 8: THE SEAM BLOCK ───────────────────────────
+		 *
+		 * The state a SEGMENT boundary carries that no earlier block can
+		 * express. R7's playthrough is a chain of segments where
+		 * `boot(N+1) == latch(N)` field for field over the SEAM SIGNATURE
+		 * (`frontend/modules/seedlingDemo/r7Acceptance.js`), so every
+		 * signature row needs exactly ONE channel — and the rows below are
+		 * the ones that had none:
+		 *
+		 *   level / x / y            v1 `boot`
+		 *   hasKey/TotemPart/SealPart  v6 `save`
+		 *   levelPersistence         v3 `persistence` (a clear SET is the
+		 *                            whole state: the fresh array is all
+		 *                            true and `botStart` re-writes it)
+		 *   gameplay stream + split  v7 `rng`
+		 *   the pins                 v5 `pins`
+		 *   ⇒ EVERYTHING ELSE        HERE
+		 *
+		 * ⚠ THE ITEM FLAGS ARE HERE AND NOT IN `grants`, AND THAT IS NOT A
+		 * SECOND CHANNEL FOR ONE FIELD. A grant is a mid-run INJECTION at a
+		 * level arrival — it fires on the first observation tick in the
+		 * level, which is AFTER that world was built, so a pickup the flag
+		 * should have despawned is still standing for that visit
+		 * (`applyGrantsFor`'s own docblock says so, and it is why R3 retires
+		 * grants class by class). A seam declares BOOT STATE, applied with
+		 * the save arrays BEFORE the first world exists. Two different
+		 * mechanisms, two different observable behaviours, one channel each.
+		 *
+		 * ⛔ AND `menu_state` IS NOT WRITABLE FROM HERE, BY THE GAME'S OWN
+		 * CONSTRUCTION. `Game`'s ctor takes a `_menuState` argument and then
+		 * calls `end()`, which runs `menuState = 0` for every `!menu` world
+		 * (`Game.as:638-639` then `:665-668`). So at a CALM arrival — which
+		 * is the only kind a segment may end on — the value is 0 by
+		 * construction, and a tape may declare only 0. The bound is stated
+		 * in both validators with that citation rather than the field being
+		 * quietly dropped.
+		 */
+		private static var seamDeclared:Boolean = false;
+		private static var seamItems:Object = null;      // name -> Boolean
+		private static var seamBeam:Boolean = false;
+		private static var seamRockSet:Boolean = false;
+		private static var seamHitsMax:int = 0;          // 0 = not declared
+		private static var seamFirstUse:Boolean = false;
+		private static var seamExtended:Boolean = false;
+		private static var seamTime:Number = 0;          // 0 = not declared
+		private static var seamPrimary:int = 0;
+		private static var seamSecondary:int = 0;
+		private static var seamGrassCut:int = 0;
+		private static var seamCutscene:Array = null;    // Array of Boolean, 4
+		private static var seamMusicSet:String = "";
+		private static var seamMusicIndex:int = -1;
+		/** The v8 extensions to the v7 `rng` block: the OTHER two streams. */
+		private static var rngCosmetic:Number = 0;       // 0 = the build's own
+		private static var rngFpSeed:Number = 0;         // 0 = inherit the page's
+
+		/**
+		 * ── R7: THE SEAM LATCH ───────────────────────────────────────────
+		 *
+		 * ⛔ A LATCH, NOT A POLL (trap 111). `botStatus` is read by the
+		 * harness whenever it gets round to it — several engine frames after
+		 * the tape disarms — and by then `Game.time` has advanced, the
+		 * generator has taken the next room's draws and `shake` has decayed.
+		 * A seam signature sampled at poll time is a signature of a moment
+		 * nobody chose. So the whole block is COPIED at the terminal disarm
+		 * and served from these statics afterwards.
+		 *
+		 * ⛔ AND IT TAKES NO DRAW, WHICH IS THE ONE CONSTRAINT THE BATCH
+		 * SPEC STATES AS A REFUSAL. Every line below is a field read or an
+		 * array copy: no `Math.random()`, no `Rng.cos()`, no `new` on any
+		 * class whose constructor draws (a `Tile` costs three, an `Enemy`
+		 * one). A latch that moved the stream it exists to report would be
+		 * an instrument that falsifies its own measurement.
+		 *
+		 * `latchPartial` marks the two FAILURE disarms — `pinFault` and
+		 * `drainEquipChecks` — which latch what they can and say so. The
+		 * seam checker reads a partial latch as UNCLAIMED, never as green.
+		 */
+		private static var latched:Object = null;
+		private static var latchPartial:Boolean = false;
+		private static var latchWhy:String = "";
+
+		/**
+		 * ── R7: THE `pressed`/`released` ECHO (R6 debt 4) ────────────────
+		 *
+		 * ⚠ ALSO A LATCH, for the trap-111 reason one readout over. The
+		 * debt asks for "one boolean that separates the candidate mechanisms
+		 * in one run" — did the GAME see the edge on the tick the tape named
+		 * — and `Input.pressed` read at poll time answers about whatever
+		 * frame the poll landed on, which is never the tick in question.
+		 * So the edges are read inside `update()` at the top of each tick,
+		 * where they are the result of the PREVIOUS tick's dispatches, and
+		 * the last tick's sets plus the running totals are echoed.
+		 */
+		private static var edgeTick:int = -1;
+		private static var edgePressed:Array = new Array();
+		private static var edgeReleased:Array = new Array();
+		private static var edgeHeld:Array = new Array();
+		private static var pressTotals:Object = new Object();
+		private static var releaseTotals:Object = new Object();
+
 		/** The loaded tape's declared version — see `autoAdvance`'s counter. */
 		private static var tapeVersion:int = 0;
 
@@ -479,6 +589,78 @@ package
 		}
 
 		/**
+		 * The tape's key vocabulary, IN ONE PLACE, for the edge echo.
+		 *
+		 * ⚠ Derived from `keyCodeFor` rather than beside it: the echo walks
+		 * these names and asks `keyCodeFor` for each code, so a name added
+		 * to the table above and not here is a key the echo silently never
+		 * reports — and a name here with no code is a loud -1 rather than a
+		 * quiet zero. (`KEY_NAMES.length` is asserted against the switch by
+		 * `tapeFormat.KEY_CODES` on the other side, which is the same list.)
+		 */
+		private static const KEY_NAMES:Array = new Array(
+			"right", "up", "left", "down",
+			"primary", "secondary", "inventory", "inventory2");
+
+		/** `Main.primary`'s ceiling — see the bound's comment in `botLoadTape`. */
+		private static const INVENTORY_MAX_SLOTS:int = 6;
+
+		/**
+		 * The thirteen SAVE ITEM FLAGS, by their own names in
+		 * `Main.SAVE_FILE.data` — the seam block's `items` vocabulary.
+		 *
+		 * ⚠ NOT `knownItem`'s list. That one is the TAPE's item vocabulary
+		 * (`sword`, `conch`, `health`) which `grantItem` maps to setters, and
+		 * two of its entries are not flags at all: `conch` writes `canSwim`
+		 * and `health` ADDS to `hitsMax`. A seam declares the save fields
+		 * themselves, so it names them as the save file does — and `hitsMax`
+		 * is its own seam field for exactly the reason `health` is not a
+		 * boolean.
+		 */
+		private static function seamItemFlag(name:String):Boolean
+		{
+			switch (name)
+			{
+				case "hasSword":     case "hasGhostSword": case "hasShield":
+				case "hasFire":      case "hasWand":       case "hasFireWand":
+				case "canSwim":      case "hasSpear":      case "hasDarkShield":
+				case "hasDarkSuit":  case "hasDarkSword":  case "hasFeather":
+				case "hasTorch":
+					return true;
+			}
+			return false;
+		}
+
+		/**
+		 * Write one save item flag, EITHER WAY.
+		 *
+		 * ⚠ A seam is not a grant: it declares the whole flag, so it must be
+		 * able to write FALSE. `grantItem` can only ever set true, which is
+		 * right for an injection and wrong for a state declaration — a
+		 * segment booting from a predecessor that had not yet found the
+		 * sword needs `hasSword: false` to mean it.
+		 */
+		private static function seamSetItem(name:String, on:Boolean):void
+		{
+			switch (name)
+			{
+				case "hasSword":      Player.hasSword = on; break;
+				case "hasGhostSword": Player.hasGhostSword = on; break;
+				case "hasShield":     Player.hasShield = on; break;
+				case "hasFire":       Player.hasFire = on; break;
+				case "hasWand":       Player.hasWand = on; break;
+				case "hasFireWand":   Player.hasFireWand = on; break;
+				case "canSwim":       Player.canSwim = on; break;
+				case "hasSpear":      Player.hasSpear = on; break;
+				case "hasDarkShield": Player.hasDarkShield = on; break;
+				case "hasDarkSuit":   Player.hasDarkSuit = on; break;
+				case "hasDarkSword":  Player.hasDarkSword = on; break;
+				case "hasFeather":    Player.hasFeather = on; break;
+				case "hasTorch":      Player.hasTorch = on; break;
+			}
+		}
+
+		/**
 		 * Register the control surface. Called lazily from `update()` so it
 		 * cannot race ExternalInterface availability at boot.
 		 *
@@ -503,6 +685,16 @@ package
 				// is therefore byte-inert past this batch by construction.
 				ExternalInterface.addCallback("botMobiles", botMobiles);
 				ExternalInterface.addCallback("botRngProbe", botRngProbe);
+				// ⚠ ITS OWN CALLBACK, on `botMobiles`' precedent and for
+				// its reason. The seam block carries `levelPersistence`'s
+				// cleared set and a sixteen-slot seal array; serialising
+				// that on every `botStatus` poll — which happens on the
+				// same thread as the update/render loop the dead-frame band
+				// rides on — is exactly the cost that could move the ratio.
+				// `botStatus.seam` carries a three-field MARKER so a poller
+				// can tell the latch fired; the block itself is inert by
+				// construction for every caller that does not ask.
+				ExternalInterface.addCallback("botSeam", botSeam);
 			}
 			catch (e:Error)
 			{
@@ -593,8 +785,8 @@ package
 				var t:Object = JSON.parse(json);
 
 				var version:int = int(t.tape_version);
-				if (version < 1 || version > 7)
-					return "error:tape_version must be 1, 2, 3, 4, 5, 6 or 7, got "
+				if (version < 1 || version > 8)
+					return "error:tape_version must be 1, 2, 3, 4, 5, 6, 7 or 8, got "
 						+ t.tape_version;
 				if (t.game != "seedling")
 					return "error:game must be seedling, got " + t.game;
@@ -936,6 +1128,230 @@ package
 							+ "hooks — the declaration would be silently ignored";
 				}
 
+				// ── the version 8 rng EXTENSIONS: the other two streams ───
+				// ⚠ VALUE-SCOPED, the SEVENTH time. `parseTape` normalises a
+				// v1..v7 tape to `{seed, split, cosmetic: 0, fp: 0}`, so a
+				// presence check would reject all 118 committed fixtures.
+				// 0 is the "declares nothing" value for both, exactly as it
+				// is for `seed`: the cosmetic stream keeps the build's own
+				// boot state and the FP LCG keeps the page's.
+				var newRngCosmetic:Number = 0;
+				var newRngFp:Number = 0;
+				if (version < 8)
+				{
+					if (rngBlock != null
+						&& (Number(rngBlock.cosmetic) != 0 || Number(rngBlock.fp) != 0))
+						return "error:tape_version " + version + " means rng: "
+							+ "{cosmetic: 0, fp: 0} BY DEFINITION — the build had no "
+							+ "such field to read. Bump tape_version to 8.";
+				}
+				else
+				{
+					var cosRaw:Number = Number(rngBlock.cosmetic);
+					if (!(cosRaw == cosRaw) || cosRaw != Math.floor(cosRaw)
+						|| cosRaw < 0 || cosRaw > 2147483647)
+						return "error:rng.cosmetic must be an integer in "
+							+ "0..2147483647 (the same n=31 orbit as `seed`), got "
+							+ rngBlock.cosmetic;
+					newRngCosmetic = cosRaw;
+					// ⛔ THE FP BOUND IS 2147483646, NOT 2147483647, AND IT IS
+					// THE SETTER'S OWN. `FP.randomSeed`'s setter is
+					// `_seed = clamp(value, 1, 2147483646)` (`FP.as:392`), so a
+					// declared 0 or 2147483647 would be silently clamped to a
+					// DIFFERENT state than the tape names — a seam field whose
+					// declared value and applied value disagree is worse than
+					// one that is absent. 0 stays the "inherit" value and is
+					// never written.
+					var fpRaw:Number = Number(rngBlock.fp);
+					if (!(fpRaw == fpRaw) || fpRaw != Math.floor(fpRaw)
+						|| fpRaw < 0 || fpRaw > 2147483646)
+						return "error:rng.fp must be an integer in 0..2147483646 "
+							+ "(FP.randomSeed's setter clamps to 1..2147483646, so a "
+							+ "value outside it would be applied as a different "
+							+ "state than declared), got " + rngBlock.fp;
+					newRngFp = fpRaw;
+					if (newRngCosmetic != 0 && !Rng.available)
+						return "error:rng declares cosmetic " + newRngCosmetic
+							+ " but this build has no swfmodern.Rng hooks — the "
+							+ "declaration would be silently ignored";
+				}
+
+				// ── the version 8 block: THE SEAM ─────────────────────────
+				//
+				// ⚠ VALUE-SCOPED like every block before it. A v1..v7 tape
+				// normalises to `seam: null` on the JS side and arrives here
+				// with the key absent or null, which is the "declares
+				// nothing" value; anything else on a v<8 tape is the two-
+				// consumers-disagree failure the format exists to prevent.
+				var seamBlock:Object = t.seam;
+				var newSeamDeclared:Boolean = false;
+				var newSeamItems:Object = null;
+				var newSeamBeam:Boolean = false;
+				var newSeamRockSet:Boolean = false;
+				var newSeamHitsMax:int = 0;
+				var newSeamFirstUse:Boolean = false;
+				var newSeamExtended:Boolean = false;
+				var newSeamTime:Number = 0;
+				var newSeamPrimary:int = 0;
+				var newSeamSecondary:int = 0;
+				var newSeamGrassCut:int = 0;
+				var newSeamCutscene:Array = null;
+				var newSeamMusicSet:String = "";
+				var newSeamMusicIndex:int = -1;
+				if (version < 8)
+				{
+					if (seamBlock != null)
+						return "error:tape_version " + version + " means seam: null "
+							+ "BY DEFINITION — the build had no such block to read, so "
+							+ "the game would boot the page's state while the JS "
+							+ "engine honoured the declaration. Bump tape_version to 8.";
+				}
+				else if (seamBlock != null)
+				{
+					if ((seamBlock is Array) || !(seamBlock is Object))
+						return "error:seam must be an object on a tape_version 8 tape";
+					newSeamDeclared = true;
+					var itemsBlock:Object = seamBlock.items;
+					if (itemsBlock != null)
+					{
+						if ((itemsBlock is Array) || !(itemsBlock is Object))
+							return "error:seam.items must be an object of "
+								+ "flag -> boolean";
+						newSeamItems = new Object();
+						for (var ik:String in itemsBlock)
+						{
+							if (!seamItemFlag(ik))
+								return "error:seam.items." + ik + " is not a save item "
+									+ "flag";
+							if (!(itemsBlock[ik] is Boolean))
+								return "error:seam.items." + ik + " must be a boolean";
+							newSeamItems[ik] = Boolean(itemsBlock[ik]);
+						}
+					}
+					newSeamBeam = (seamBlock.beam == true);
+					newSeamRockSet = (seamBlock.rock_set == true);
+					newSeamFirstUse = (seamBlock.first_use == true);
+					newSeamExtended = (seamBlock.extended == true);
+					// ⛔ EVERY BOUND BELOW IS A GETTER'S OWN FALSY ARM, not a
+					// taste. `Main.hitsMax` returns `Player.hitsMaxDef` when
+					// the stored value is falsy, `Main.time` returns
+					// `Game.dayLength / 2`, and `Main.primary`/`secondary`/
+					// `grassCut` return 0 — so 0 is UNREPRESENTABLE for the
+					// first two and means "not declared" here. A tape that
+					// declared `hits_max: 0` would be booting 3.
+					if (seamBlock.hits_max != null)
+					{
+						newSeamHitsMax = int(seamBlock.hits_max);
+						if (newSeamHitsMax < 1 || newSeamHitsMax > 99)
+							return "error:seam.hits_max must be 1..99 (0 is "
+								+ "unrepresentable — `Main.hitsMax`'s getter returns "
+								+ "Player.hitsMaxDef for a falsy store), got "
+								+ seamBlock.hits_max;
+					}
+					if (seamBlock.time != null)
+					{
+						newSeamTime = Number(seamBlock.time);
+						if (!(newSeamTime == newSeamTime) || newSeamTime <= 0
+							|| newSeamTime > 4294967295)
+							return "error:seam.time must be > 0 and <= 4294967295 (0 "
+								+ "is unrepresentable — `Main.time`'s getter returns "
+								+ "Game.dayLength / 2 for a falsy store), got "
+								+ seamBlock.time;
+					}
+					// ⚠ A SLOT INDEX, NOT AN ITEM ID. `Main.primary` indexes
+					// the array `Inventory.getItem` reads and `Player.useItem`
+					// switches on what comes back — six ids exist (sword, fire,
+					// wand, spear, ghostsword, firewand), so six slots is the
+					// ceiling `addItemsFromSave` plus its fusion splices can
+					// reach. An out-of-range write is a SILENT no-op
+					// (`Inventory.itemCount`'s own docblock), which is why the
+					// bound is stated here rather than left to the game.
+					if (seamBlock.primary != null)
+					{
+						newSeamPrimary = int(seamBlock.primary);
+						if (newSeamPrimary < 0 || newSeamPrimary >= INVENTORY_MAX_SLOTS)
+							return "error:seam.primary must be a slot index in 0.."
+								+ (INVENTORY_MAX_SLOTS - 1) + ", got "
+								+ seamBlock.primary;
+					}
+					if (seamBlock.secondary != null)
+					{
+						newSeamSecondary = int(seamBlock.secondary);
+						if (newSeamSecondary < 0
+							|| newSeamSecondary >= INVENTORY_MAX_SLOTS)
+							return "error:seam.secondary must be a slot index in 0.."
+								+ (INVENTORY_MAX_SLOTS - 1) + ", got "
+								+ seamBlock.secondary;
+					}
+					if (seamBlock.grass_cut != null)
+					{
+						newSeamGrassCut = int(seamBlock.grass_cut);
+						// ⛔ THE UPPER BOUND IS A SIDE EFFECT, NOT A RANGE.
+						// `Main`'s `grassCut` SETTER calls `unlockMedal` at
+						// >= 10000 (`Main.as:191`), and `unlockMedal` is a
+						// DISTRIBUTION path (`hasBadge` is the one signature
+						// row declared `excluded` for exactly this reason).
+						// A seam that could fire it would make a save-state
+						// declaration reach outside the game.
+						if (newSeamGrassCut < 0 || newSeamGrassCut > 9999)
+							return "error:seam.grass_cut must be 0..9999 — `Main`'s "
+								+ "setter calls unlockMedal at >= 10000, which is a "
+								+ "distribution path a state declaration must not "
+								+ "reach; got " + seamBlock.grass_cut;
+					}
+					if (seamBlock.cutscene != null)
+					{
+						var cs:Array = seamBlock.cutscene as Array;
+						if (cs == null || cs.length != Game.cutscene.length)
+							return "error:seam.cutscene must be an array of "
+								+ Game.cutscene.length + " booleans";
+						newSeamCutscene = new Array();
+						for (var ci:int = 0; ci < cs.length; ci++)
+						{
+							if (!(cs[ci] is Boolean))
+								return "error:seam.cutscene[" + ci
+									+ "] must be a boolean";
+							newSeamCutscene.push(Boolean(cs[ci]));
+						}
+					}
+					// ⛔ `menu_state` MAY ONLY BE 0, AND THE GAME DECIDES THAT.
+					// `Game`'s ctor honours a `_menuState` argument and then
+					// calls `end()`, which runs `menuState = 0` for every
+					// `!menu` world (`Game.as:638-639`, `:665-668`). A calm
+					// arrival is by definition `!menu`, so 0 is the only value
+					// a segment boundary can carry — declared and bounded
+					// rather than dropped, so the signature row has a channel
+					// and the impossibility is stated where it is checked.
+					if (seamBlock.menu_state != null && int(seamBlock.menu_state) != 0)
+						return "error:seam.menu_state must be 0 — `Game.end()` writes "
+							+ "menuState = 0 for every !menu world (Game.as:665-668), "
+							+ "so no other value survives a calm arrival; got "
+							+ seamBlock.menu_state;
+					var musicBlock:Object = seamBlock.music;
+					if (musicBlock != null)
+					{
+						if ((musicBlock is Array) || !(musicBlock is Object))
+							return "error:seam.music must be an object {set, index}";
+						newSeamMusicSet = (musicBlock.set == null)
+							? "" : String(musicBlock.set);
+						if (newSeamMusicSet != "" && !Music.hasSet(newSeamMusicSet))
+							return "error:seam.music.set \"" + newSeamMusicSet
+								+ "\" is not a sound set name";
+						newSeamMusicIndex = (musicBlock.index == null)
+							? -1 : int(musicBlock.index);
+						if (newSeamMusicIndex < -1
+							|| (newSeamMusicSet != ""
+								&& newSeamMusicIndex >= Music.setLength(newSeamMusicSet)))
+							return "error:seam.music.index must be -1 (nothing played) "
+								+ "or an index into the declared set, got "
+								+ musicBlock.index;
+						if (newSeamMusicSet == "" && newSeamMusicIndex != -1)
+							return "error:seam.music.index is " + newSeamMusicIndex
+								+ " with no set — `Music.playSound`'s do-while reads "
+								+ "BOTH, so an index without its set is half a state";
+					}
+				}
+
 				var codes:Array = new Array();
 				var froms:Array = new Array();
 				var tos:Array = new Array();
@@ -995,6 +1411,22 @@ package
 				pinDeadFrames = newPinDeadFrames;
 				rngSeed = newRngSeed;
 				rngSplit = newRngSplit;
+				rngCosmetic = newRngCosmetic;
+				rngFpSeed = newRngFp;
+				seamDeclared = newSeamDeclared;
+				seamItems = newSeamItems;
+				seamBeam = newSeamBeam;
+				seamRockSet = newSeamRockSet;
+				seamHitsMax = newSeamHitsMax;
+				seamFirstUse = newSeamFirstUse;
+				seamExtended = newSeamExtended;
+				seamTime = newSeamTime;
+				seamPrimary = newSeamPrimary;
+				seamSecondary = newSeamSecondary;
+				seamGrassCut = newSeamGrassCut;
+				seamCutscene = newSeamCutscene;
+				seamMusicSet = newSeamMusicSet;
+				seamMusicIndex = newSeamMusicIndex;
 				tapeVersion = version;
 
 				loaded = true;
@@ -1008,6 +1440,8 @@ package
 				sawAutoAdvance = 0;
 				helpWasUp = false;
 				freezeWasUp = false;
+				clearLatch();
+				clearEdgeEcho();
 				clearObservations();
 				return "ok";
 			}
@@ -1145,20 +1579,93 @@ package
 				for (si = 0; si < saveSealParts.length; si++)
 					Main.hasSealPartSet(si, int(saveSealParts[si]));
 			}
+			// ── R7: THE SEAM BLOCK, WITH THE SAVE ARRAYS AND FOR THEIR ───
+			//     REASON — before the world exists.
+			//
+			// Every field here is read by something that runs at BUILD time
+			// or on the new world's first `check()`: `Pickups/Shield.as:46`
+			// gates on the flag, `Moonrock`'s ctor reads `Main.rockSet` and
+			// turns itself into a 48x48 Solid, `Inventory.addItemsFromSave`
+			// is what `Game.begin()`'s `inventory.check()` walks, and
+			// `Game.cutscene[2]` decides whether the player spawns inert.
+			// A write after `new Game(...)` would be a declaration the first
+			// visit does not honour — the "already too late to despawn"
+			// fact, one block on.
+			//
+			// ⚠ GATED ON THE TAPE DECLARING A SEAM AT ALL, so a v1..v7 tape
+			// takes a byte-identical path — the same shape as the
+			// persistence, save and rng arms, and the reason this batch can
+			// claim zero re-records rather than hope for them.
+			//
+			// ⚠ AND EACH FIELD IS GATED SEPARATELY, because 0 is the falsy
+			// arm of three of the game's own getters (`hitsMax`, `time`,
+			// and the two slots) and therefore cannot mean "declared zero".
+			// The bounds in `botLoadTape` refuse the unrepresentable values
+			// rather than letting one arrive here and land as a default.
+			if (seamDeclared)
+			{
+				var itemName:String;
+				if (seamItems != null)
+				{
+					for (itemName in seamItems)
+					{
+						seamSetItem(itemName, Boolean(seamItems[itemName]));
+					}
+				}
+				Main.beam = seamBeam;
+				Main.rockSet = seamRockSet;
+				Main.firstUse = seamFirstUse;
+				Main.extended = seamExtended;
+				if (seamHitsMax != 0) Main.hitsMax = seamHitsMax;
+				if (seamTime != 0) Main.time = seamTime;
+				Main.primary = seamPrimary;
+				Main.secondary = seamSecondary;
+				Main.grassCut = seamGrassCut;
+				if (seamCutscene != null)
+				{
+					for (var cj:int = 0; cj < seamCutscene.length
+						&& cj < Game.cutscene.length; cj++)
+					{
+						Game.cutscene[cj] = Boolean(seamCutscene[cj]);
+					}
+				}
+				// ⛓ The no-repeat REJECTION LOOP's own two variables.
+				// `Music.playSound` redraws while `cplayIndex == currentIndex
+				// && currentSet == strInd`, so these decide how many draws
+				// the next sound costs — which is why the signature carries
+				// them and why declaring them is a WRITE and not an assert.
+				Music.botSetCurrent(seamMusicSet, seamMusicIndex);
+			}
 			if (bootLevel != Main.level || !atBootPosition())
 			{
 				FP.world = new Game(bootLevel, bootX, bootY);
 			}
-			// ── R6 slice 6a: the RNG reset, AFTER the world is built ──────
+			// ── R6 slice 6a: the RNG reset, AFTER the `new Game` line ─────
 			//
-			// ⛓⛓⛓ THE POSITION OF THIS LINE IS THE WHOLE POINT. `new Game`
-			// runs its constructor synchronously right above — three
-			// `Math.random()` draws for every Tile it builds, one per Enemy —
-			// and the swap itself is deferred to end-of-tick. Resetting BELOW
-			// it means the model owes nothing for the world build, and
-			// nothing for the page's whole history before it: the stream
-			// starts at a number the TAPE declared. Resetting above it would
-			// have handed the model a tile census to count instead.
+			// ⛓⛓⛓ THE POSITION OF THIS LINE IS THE WHOLE POINT, AND R7
+			// SLICE 1 CORRECTED WHY. The previous version of this comment
+			// said `new Game` "runs its constructor synchronously right
+			// above — three `Math.random()` draws for every Tile it builds"
+			// and concluded that resetting BELOW it means the model owes
+			// nothing for the build. ⛔ THE PREMISE IS BACKWARDS (trap 112,
+			// source-verified at slice 0): `new Game(...)` only writes
+			// `FP._goto` and its CONSTRUCTOR BUILDS NOTHING — the swap runs
+			// in `Engine.checkWorld()` at the END of `Engine.update()`, and
+			// `begin()` is what calls `loadlevel` (`Game.as:629` ctor vs
+			// `:784` in `begin`). So not one tile draw has been taken by the
+			// time control reaches this line.
+			//
+			// The code is right; the reason is the other way round. The
+			// build is DEFERRED past every line in this function, so the
+			// reset lands BEFORE it wherever in `botStart` it sits — and
+			// what the position actually buys is that the reset happens
+			// after the OUTGOING world's last update and after the boot
+			// block's own writes, so the stream a tape declares is the
+			// stream the first build draws from. A reset placed above the
+			// `new Game` line would be equivalent today and would break the
+			// moment a boot-side write took a draw of its own; keeping it
+			// here keeps "the declared seed is the build's first number"
+			// true by construction rather than by coincidence.
 			//
 			// ⚠ Both writes are gated on the tape declaring something, so a
 			// v1..v6 tape takes a byte-identical path to the one it took
@@ -1169,15 +1676,27 @@ package
 			// dependence the declaration exists to remove. Assigning false
 			// is inert.
 			//
-			// ⛓ The COSMETIC stream is reset to 0 — the BUILD's own boot
-			// seed — and not to the tape's. Deliberately not the same
-			// number: two generators started at the same state return the
-			// same first value, which is exactly the coincidence that would
-			// let a MISROUTED draw (a gameplay site accidentally on the
-			// cosmetic stream) look correct on the tick that matters.
+			// ⛓ The COSMETIC stream defaults to 0 — the BUILD's own boot
+			// seed — and not to the tape's gameplay seed. Deliberately not
+			// the same number: two generators started at the same state
+			// return the same first value, which is exactly the coincidence
+			// that would let a MISROUTED draw (a gameplay site accidentally
+			// on the cosmetic stream) look correct on the tick that matters.
+			// ⛓ R7: a v8 tape may declare that state instead, because a
+			// SEGMENT does not start the cosmetic stream at the build's boot
+			// seed — it starts it where its predecessor left it.
 			Rng.split = rngSplit;
 			if (rngSeed != 0) Rng.setState(rngSeed);
-			if (rngSplit) Rng.setCosmeticState(0);
+			if (rngSplit) Rng.setCosmeticState(rngCosmetic);
+			// ⛓ R7: FlashPunk's own Park-Miller LCG, the THIRD generator.
+			// Written through `FP.randomSeed`'s SETTER, which is the one
+			// half of that property that works: it writes `_seed` (the live
+			// state the draws advance) and syncs `_getSeed` behind it. The
+			// GETTER is the broken half — it returns `_getSeed`, which only
+			// the setter ever writes — so the read side of this hook is
+			// `FP.randomSeedLive`, added in this batch. Gated on a declared
+			// non-zero, so no v1..v7 tape reaches it.
+			if (rngFpSeed != 0) FP.randomSeed = uint(rngFpSeed);
 			armed = true;
 			finished = false;
 			errorText = "";
@@ -1429,7 +1948,23 @@ package
 				// a model claiming "the first hit is swallowed" is checked
 				// against the count rather than against a knockback 13 ticks
 				// downstream.
-				slash: { tests: slashTests, hits: slashHits }
+				slash: { tests: slashTests, hits: slashHits },
+				// ── R7: the seam latch's MARKER, not its block ────────────
+				// Three fields, so a poller can tell the latch fired and
+				// whether it is partial without paying for the block. The
+				// block itself is `botSeam()` — the `botMobiles` ruling,
+				// applied to a readout that carries a 3,480-flag array's
+				// cleared set.
+				seam: { latched: latched != null, partial: latchPartial,
+					why: latchWhy },
+				// ── R7: the edge echo (R6 debt 4) ─────────────────────────
+				// `t` is the tick the sets were read AT, and it is the
+				// point: the edges are the result of tick `t - 1`'s
+				// dispatches, latched inside `update()` rather than sampled
+				// here. `-1` means no armed tick has run.
+				input: { t: edgeTick, pressed: edgePressed,
+					released: edgeReleased, held: edgeHeld,
+					press_totals: pressTotals, release_totals: releaseTotals }
 			};
 			return JSON.stringify(o);
 		}
@@ -1457,6 +1992,217 @@ package
 				has_all_totem_parts: Player.hasAllTotemParts(),
 				has_all_seal_parts: SealController.hasAllSealParts()
 			};
+		}
+
+		/**
+		 * ── R7: THE SEAM LATCH ───────────────────────────────────────────
+		 *
+		 * The whole SEAM SIGNATURE, copied at the disarm.
+		 *
+		 * ⛔ THE KEYS ARE `SEAM_SIGNATURE[].field` VERBATIM. The other side
+		 * (`frontend/modules/seedlingDemo/r7Acceptance.js`) maps its signature
+		 * over `seam.exit[row.field]`, so a translation table between the two
+		 * would be a second transcription of the field list and the two would
+		 * drift — trap 86, in the shape it takes when the list is a wire
+		 * format. A row added there with no key here reads UNCLAIMED, which is
+		 * the correct answer and not a silence.
+		 *
+		 * ⛔ NO DRAW IS TAKEN HERE. Field reads and array copies only: no
+		 * `Math.random()`, no `Rng.cos()`, no `new` on a class whose ctor
+		 * draws. `Rng.state` and `Rng.cosmeticState` are runtime hook READS
+		 * (`Rng.as:118-131`) and advance nothing; `Rng.cosDraw()` would have,
+		 * and is deliberately not called.
+		 *
+		 * ⚠ `levelPersistence` rides as the CLEARED SET, not as 3,480
+		 * booleans. That is the same shape the v3 `persistence` block
+		 * declares, so the seam checker compares a boot declaration against an
+		 * exit latch without either side re-deriving the other's form — and
+		 * the fresh array is all-true, so the cleared set IS the state.
+		 *
+		 * ⚠ `static.Game.inventory` is the SLOT ARRAY, not an instance
+		 * identity. The signature's row is "the same instance across the
+		 * swap", which is a within-page invariant no wire format can carry;
+		 * what a SEGMENT boundary has to reproduce is the array
+		 * `Main.primary` indexes into, and that is what this carries.
+		 *
+		 * @param partial the two FAILURE disarms latch what they can and mark
+		 *                it, because a partial latch is an UNCLAIMED seam and
+		 *                never a green one
+		 */
+		private static function latchSeam(partial:Boolean, why:String):void
+		{
+			var p:Player = findPlayer();
+			var game:Game = FP.world as Game;
+			var o:Object = new Object();
+
+			o["level"] = Main.level;
+			o["playerPositionX"] = Main.playerPositionX;
+			o["playerPositionY"] = Main.playerPositionY;
+
+			o["save.hasSword"] = Main.hasSword;
+			o["save.hasGhostSword"] = Main.hasGhostSword;
+			o["save.hasShield"] = Main.hasShield;
+			o["save.hasFire"] = Main.hasFire;
+			o["save.hasWand"] = Main.hasWand;
+			o["save.hasFireWand"] = Main.hasFireWand;
+			o["save.canSwim"] = Main.canSwim;
+			o["save.hasSpear"] = Main.hasSpear;
+			o["save.hasDarkShield"] = Main.hasDarkShield;
+			o["save.hasDarkSuit"] = Main.hasDarkSuit;
+			o["save.hasDarkSword"] = Main.hasDarkSword;
+			o["save.hasFeather"] = Main.hasFeather;
+			o["save.hasTorch"] = Main.hasTorch;
+			o["save.beam"] = Main.beam;
+			o["save.rockSet"] = Main.rockSet;
+			o["save.hitsMax"] = Main.hitsMax;
+			o["save.firstUse"] = Main.firstUse;
+			o["save.extended"] = Main.extended;
+			o["save.time"] = Main.time;
+			o["save.primary"] = Main.primary;
+			o["save.secondary"] = Main.secondary;
+			o["save.grassCut"] = Main.grassCut;
+
+			var i:int;
+			var keys:Array = new Array();
+			for (i = 0; i < Player.totalKeys; i++) keys.push(Player.hasKey(i));
+			o["save.hasKey"] = keys;
+			var totem:Array = new Array();
+			for (i = 0; i < Player.totemParts; i++) totem.push(Player.hasTotemPart(i));
+			o["save.hasTotemPart"] = totem;
+			var seals:Array = new Array();
+			for (i = 0; i < SealController.SEALS; i++) seals.push(Main.hasSealPart(i));
+			o["save.hasSealPart"] = seals;
+			o["save.levelPersistence"] = persistenceClearedAll();
+
+			var cut:Array = new Array();
+			for (i = 0; i < Game.cutscene.length; i++) cut.push(Game.cutscene[i]);
+			o["static.Game.cutscene"] = cut;
+			o["static.Game.shake"] = Game.shake;
+			o["static.Game.menu"] = Game.menu;
+			o["static.Game.menuState"] = Game.menuStateReadout;
+			o["static.Game.freezeObjects"] = Game.freezeObjects;
+			o["static.Game.talking"] = Game.talking;
+			o["static.Game.inventory"] = slotsReadout();
+			o["static.Music.currentSet"] = Music.currentSetReadout;
+			o["static.Music.currentIndex"] = Music.currentIndexReadout;
+			o["static.Rng.split"] = Rng.split;
+			o["static.Bot.pins"] = { sound: pinSoundClock, dead_frames: pinDeadFrames };
+
+			o["rng.gameplay"] = Rng.state;
+			o["rng.cosmetic"] = Rng.cosmeticState;
+			o["fp.seed"] = FP.randomSeedLive;
+
+			// ⚠ `blackCover` lives on the WORLD, not on a static, so a latch
+			// taken with no `Game` current reports -1 rather than 0 — and 0 is
+			// the value "the fade is spent" asserts. A missing world must not
+			// read as a calm arrival.
+			o["arrival.blackCover"] = (game == null) ? -1 : game.blackCover;
+			o["arrival.velocity"] = (p == null) ? null : {
+				vx: p.v.x, vy: p.v.y, hits: p.hits, hits_timer: p.hitsTimer
+			};
+
+			// The tick this was taken at, so a consumer can prove the latch is
+			// the DISARM's and not some later frame's.
+			o["latch.tick"] = tick;
+			o["latch.dead_frames"] = deadFrames;
+
+			latched = o;
+			latchPartial = partial;
+			latchWhy = why;
+		}
+
+		/** Forget the latch. `botLoadTape`/`botReset` only — never a disarm. */
+		private static function clearLatch():void
+		{
+			latched = null;
+			latchPartial = false;
+			latchWhy = "";
+		}
+
+		/**
+		 * The latched seam block, or a well-formed "nothing latched".
+		 *
+		 * ⚠ ITS OWN CALLBACK, on `botMobiles`' precedent: `botStatus` is
+		 * polled on the update/render thread whose RATIO the dead-frame band
+		 * rides on, and this block is a few KB. Inert by construction for
+		 * every caller that does not ask.
+		 */
+		public static function botSeam():String
+		{
+			return JSON.stringify({
+				latched: latched != null,
+				partial: latchPartial,
+				why: latchWhy,
+				seam: latched
+			});
+		}
+
+		/**
+		 * ── R7: THE EDGE ECHO (R6 debt 4) ────────────────────────────────
+		 *
+		 * What the GAME saw, at the top of tick `tick` — which is the result
+		 * of the edges dispatched on tick `tick - 1`.
+		 *
+		 * ⚠ READ IN `update()` AND NOT IN `botStatus`, and that is the whole
+		 * readout. `Input.pressed(code)` is true for exactly one frame —
+		 * `Engine.onEnterFrame` clears the queues at the end of every frame
+		 * (`Engine.as:170-173`) — while a harness poll lands several engine
+		 * frames after the tick it is asking about. A polled answer is about
+		 * a frame nobody chose (trap 111, the same shape as the seam latch
+		 * two functions up). The debt asks for "one boolean that separates
+		 * the candidate mechanisms in one run" — did the game see the press
+		 * on the tick the tape named — and only a latch can answer it.
+		 *
+		 * ⚠ AND THE CALL SITE IS AFTER THE DISPATCH LOOPS, so `edgeTick` is
+		 * the tick the edges are LIVE ON, in the tape's own numbering. See
+		 * the comment at the call site for why the other placement is
+		 * vacuous.
+		 *
+		 * ⚠ `check` rides alongside `pressed`/`released` because the R6
+		 * measurement that raised this debt was about a HOLD's boundary
+		 * (§19.5's `from`-vs-`to` question), and a hold is `check` true with
+		 * neither edge — a state the two edge sets cannot express between
+		 * them.
+		 */
+		private static function recordEdges():void
+		{
+			edgeTick = tick;
+			edgePressed = new Array();
+			edgeReleased = new Array();
+			edgeHeld = new Array();
+			for (var i:int = 0; i < KEY_NAMES.length; i++)
+			{
+				var name:String = String(KEY_NAMES[i]);
+				var code:int = keyCodeFor(name);
+				if (code < 0) continue;
+				if (Input.pressed(code))
+				{
+					edgePressed.push(name);
+					pressTotals[name] = int(pressTotals[name]) + 1;
+				}
+				if (Input.released(code))
+				{
+					edgeReleased.push(name);
+					releaseTotals[name] = int(releaseTotals[name]) + 1;
+				}
+				if (Input.check(code)) edgeHeld.push(name);
+			}
+		}
+
+		/** Forget the edge echo. `botLoadTape`/`botReset` only. */
+		private static function clearEdgeEcho():void
+		{
+			edgeTick = -1;
+			edgePressed = new Array();
+			edgeReleased = new Array();
+			edgeHeld = new Array();
+			pressTotals = new Object();
+			releaseTotals = new Object();
+			for (var i:int = 0; i < KEY_NAMES.length; i++)
+			{
+				pressTotals[String(KEY_NAMES[i])] = 0;
+				releaseTotals[String(KEY_NAMES[i])] = 0;
+			}
 		}
 
 		/**
@@ -1760,6 +2506,9 @@ package
 				errorText = "equip at tick " + pendEquipTick[i] + " selected slot "
 					+ slot + " but the inventory holds " + Inventory.itemCount
 					+ " item(s); useItem on an out-of-range slot is a silent no-op";
+				// R7: the second failure disarm, marked partial for
+				// `pinFault`'s reason exactly.
+				latchSeam(true, "equip check failed: " + errorText);
 				armed = false;
 				finished = true;
 				return;
@@ -1896,6 +2645,31 @@ package
 			rngSeed = 0;
 			rngSplit = false;
 			Rng.split = false;
+			// ⚠ R7: FORGOTTEN, NOT UNDONE — the `rngSeed` rule, applied to
+			// the other two streams and to the seam. The DECLARATIONS are
+			// dropped so the next tape's boot is a pure function of the next
+			// tape; the game's own state (the cosmetic generator's position,
+			// FlashPunk's `_seed`, every save flag the seam wrote) is left
+			// exactly where the tape left it, because a reset is a rewind
+			// the game itself can never do.
+			rngCosmetic = 0;
+			rngFpSeed = 0;
+			seamDeclared = false;
+			seamItems = null;
+			seamBeam = false;
+			seamRockSet = false;
+			seamHitsMax = 0;
+			seamFirstUse = false;
+			seamExtended = false;
+			seamTime = 0;
+			seamPrimary = 0;
+			seamSecondary = 0;
+			seamGrassCut = 0;
+			seamCutscene = null;
+			seamMusicSet = "";
+			seamMusicIndex = -1;
+			clearLatch();
+			clearEdgeEcho();
 			slashTests = 0;
 			slashHits = 0;
 			spanCode = new Array();
@@ -2022,6 +2796,29 @@ package
 				if (int(spanFrom[i]) == tick) dispatchKey(int(spanCode[i]), true);
 			}
 
+			// ⛓ R7: THE EDGE ECHO, AFTER THE DISPATCHES AND BEFORE THE
+			// DISARM — which is the only placement that answers the debt's
+			// question, and the FIRST one was wrong.
+			//
+			// `Engine.onEnterFrame` is `update(); Input.update();`
+			// (`Engine.as:170-173`), so the edge queues are cleared at the
+			// END of every frame: an edge dispatched on tick t is live for
+			// exactly tick t's world update and is GONE by tick t+1. Reading
+			// the sets at the top of a tick — where this first went — would
+			// therefore have reported an empty press list on every tick and
+			// a check built on it would have been vacuous, in the direction
+			// that reads as "the bot dispatched nothing".
+			//
+			// Here, the sets are what `Player.input()` is about to see, four
+			// calls later in the same frame. That is not the bot echoing its
+			// own intent: the edges travelled the real path — a
+			// `KeyboardEvent` on `FP.stage`, `Input.onKeyDown`, the
+			// `_key[code]` idempotence guard — and every one of those is a
+			// place a press can be swallowed. R6 §19.5 spent two slices
+			// deciding whether the game ended a freeze on a span's `from` or
+			// its `to`; this readout answers that in one run.
+			recordEdges();
+
 			if (tick >= tickCount)
 			{
 				// ⚠ An equip whose check never drained is a FAILURE, not a
@@ -2037,6 +2834,30 @@ package
 						+ "the slot cannot have held anything and every press was a "
 						+ "silent no-op";
 				}
+				// ── R7: THE SEAM LATCH, HERE AND NOWHERE ELSE ─────────────
+				//
+				// The only disarm site with the player, the world and both
+				// generators in scope, running AFTER the final observation
+				// and after every KEY_UP — and BEFORE this frame's
+				// `super.update()`, so nothing the tape did not drive has
+				// moved yet.
+				//
+				// ⚠ IT RUNS BEFORE `armed = false`, deliberately. Nothing
+				// here reads `armed`, but the order says what the latch IS:
+				// the last thing the armed tape does, not the first thing
+				// the disarmed one does.
+				//
+				// ⛔ AND THE SEGMENT CONVENTION IS NOT THIS FUNCTION'S TO
+				// ENFORCE. On a tick that touched a teleporter the OLD world
+				// is still current with the NEW `Main.level` already
+				// written, so a tape ending on a trigger tick latches a
+				// signature nothing can boot. That is why R7 ends tapes at
+				// ARRIVAL, post-fade — the R1 ENDS-MEET convention — and why
+				// `arrival.blackCover` and `arrival.velocity` ride in the
+				// block: the latch reports the calm-arrival invariants
+				// rather than assuming them, and the seam checker refuses a
+				// signature that fails them.
+				latchSeam(errorText != "", errorText);
 				// The final observation has been recorded and every hold
 				// released; disarm without consuming another tick.
 				armed = false;
@@ -2119,19 +2940,22 @@ package
 		 * docblock that contradicts its own code two lines later is the
 		 * failure worth remembering.
 		 *
-		 * So the readout means "**no NPC dialogue was auto-advanced**", NOT
-		 * "no ceremony fired". That matters because `saw_auto_advance == 0`
+		 * So the readout MEANT "**no NPC dialogue was auto-advanced**", NOT
+		 * "no ceremony fired". That mattered because `saw_auto_advance == 0`
 		 * is asserted on every fixture as a CENSUS GUARD — "a freeze fired
-		 * that nobody planned for" — and the whole `Help` class is currently
-		 * invisible to it. Nothing built on it is wrong (the JS model
+		 * that nobody planned for" — and the whole `Help` class was
+		 * invisible to it. Nothing built on it was wrong (the JS model
 		 * reproduces every tape exactly, which is the real evidence), but
-		 * the guard has a hole in the shape of the thing the R3 batch added.
+		 * the guard had a hole in the shape of the thing the R3 batch added.
 		 *
-		 * THE FIX IS AS3 and therefore belongs to the NEXT BATCH, not to a
-		 * build of its own: count in `dispatchKey`'s phase-0 arm as well, or
-		 * count once per freeze rather than once per release. R3 closed
-		 * under a zero-further-AS3 rule, so this comment is the whole of the
-		 * change it was allowed to make.
+		 * ✅ **CLOSED AT R7 SLICE 1**, three rungs and two half-fixes later.
+		 * R3 named the fix and closed under a zero-further-AS3 rule; R4
+		 * counted a `Help`'s arrival but scoped it to v4; R5 unified the
+		 * unit but scoped that to v5. Both scopings cited frozen
+		 * expectations that were measured not to exist (see the counter's
+		 * own comment below), so R7 dropped the scoping and the counter is
+		 * ONE RULE for every version: **a freeze arrival, whatever raised
+		 * it**. The readout now means what its name always said.
 		 */
 		private static function autoAdvance():void
 		{
@@ -2140,55 +2964,57 @@ package
 			// world reference is re-read here rather than assumed.
 			var helpUp:Boolean = FP.world != null
 				&& FP.world.classFirst(Help) != null;
-			// ── R4: THE COUNTER FIX, AND WHY IT IS VERSION-SCOPED ─────────
+			// ── ⛓⛓⛓ R7 SLICE 1: THE UNIFICATION, AND THE PREMISE THAT ────
+			//     JUSTIFIED THREE COUNTING RULES WAS MEASURED FALSE
 			//
-			// The blind spot the paragraph above describes, closed: count a
-			// Help's ARRIVAL rather than a phase. A Help ends its freeze on
-			// the PRESS (phase 0), so phase 1 — where the counter lived —
-			// never runs for one; counting the arrival is also immune to a
-			// Help that needs more than one press, which a phase-0 counter
-			// would double-count.
-			//
-			// ⚠ IT IS NOT BYTE-INERT, WHICH IS WHY IT IS SCOPED TO v4. The
-			// sword's `Help(3)` is auto-advanced on every run that collects
-			// the sword, so an unscoped fix changes the REPORTED VALUE for
+			// The counter used to have three arms — v<=3 counted phase-1
+			// RELEASES, v4 counted a `Help`'s ARRIVAL, v5+ counted ANY
+			// freeze's arrival — and both scopings were justified in the
+			// same words: *"an unscoped fix changes the REPORTED VALUE for
 			// ~8 frozen R3 collection fixtures whose committed expectations
-			// say `saw_auto_advance: 0` and whose sweep asserts that field
-			// per tape. They would fail the flags-off inertness gate BY
-			// BEING CORRECT. v<=3 tapes keep the bug-compatible count; a v4
-			// tape gets the honest one, and R4 asserts it as a POSITIVE.
-			// ── R5: THE UNIFICATION, AND WHY IT IS ALSO VERSION-SCOPED ────
+			// say `saw_auto_advance: 0` … they would fail the flags-off
+			// inertness gate BY BEING CORRECT."*
 			//
-			// R4's fix above closed the blind spot but left TWO counting
-			// rules in one counter: a dialogue counted on the RELEASE, a
-			// `Help` on its ARRIVAL. So `saw_auto_advance` meant "dialogue
-			// releases plus Help arrivals" — a number with no single unit,
-			// which is not a census guard so much as two guards sharing a
-			// field. R3 recorded the fix as owed and R4 could only do half of
-			// it; this is the other half.
+			// ⛔ NO COMMITTED EXPECTATION HAS EVER CARRIED THE FIELD.
+			// Measured at R7 slice 0 over all 118 expectation files: they
+			// are exactly `{ticks: [{t, x, y, level}], transitions: [{t,
+			// from_level, to_level}]}` — 142,774 observations, zero
+			// occurrences of `saw_auto_advance`. What asserts it is the
+			// SWEEP, which re-derives its expectation from the model on
+			// every run; nothing is frozen and nothing can be re-recorded
+			// wrong. So the readout was version-scoped for two rungs to
+			// protect files that do not exist, and the second half of the
+			// comment above (`Bot.as:2158-2162` as it stood) asserted a
+			// property of the corpus that a five-line script refuted.
 			//
-			// v5's rule is ONE: count a FREEZE ARRIVAL, whatever raised it.
-			// The unit is then "ceremonies the bot dismissed", which is what
-			// the readout was always supposed to mean and what the fixture
-			// sweeps assert as `0`.
+			// ⛓ THE RULE IS NOW ONE, FOR EVERY VERSION: count a FREEZE
+			// ARRIVAL, whatever raised it. The unit is "ceremonies the bot
+			// dismissed" — one per freeze however many presses it takes,
+			// immune to a `Help` that ends on the press (phase 1 never runs
+			// for one) and to a dialogue that needs several (phase 1 runs
+			// repeatedly).
 			//
-			// ⚠ SCOPED, for the R4 reason exactly: it is NOT byte-inert. A
-			// dialogue that takes several presses counted once per release
-			// under v<=4 and counts once TOTAL under v5, so an unscoped
-			// change would move the reported value for committed fixtures
-			// whose expectations say `saw_auto_advance: 0` and whose sweep
-			// asserts that field per tape — they would fail the flags-off
-			// inertness gate BY BEING CORRECT.
+			// ⛔⛔ AND THE CHANGE IS BYTE-INERT ON THE STREAM BY
+			// CONSTRUCTION, NOT BY LUCK — which is the constraint this
+			// batch was allowed under, stated as a REFUSAL: **unify the
+			// COUNTER, never the PRESSER.** `dispatchKey` below is
+			// unconditional on every version and stays that way; a press
+			// schedule that cannot change cannot move a frozen frame, and a
+			// frozen-frame count that cannot move cannot shift the LFSR. The
+			// only thing that moves is the REPORTED VALUE, on the three v<=3
+			// tapes that collect a sword, and the sweep's own derivation
+			// moves with them (`verify-seedling-bot-differential.mjs`'s
+			// `wantAutoAdvance`, which drops its `tape_version >= 4` arm in
+			// the same batch).
 			var freezeUp:Boolean = Game.talking || helpUp;
-			if (tapeVersion >= 5)
-			{
-				if (freezeUp && !freezeWasUp) sawAutoAdvance++;
-			}
-			else if (tapeVersion == 4)
-			{
-				if (helpUp && !helpWasUp) sawAutoAdvance++;
-			}
+			if (freezeUp && !freezeWasUp) sawAutoAdvance++;
 			freezeWasUp = freezeUp;
+			// ⚠ KEPT, though nothing counts on it any more: `helpWasUp` is
+			// the edge memory a future Help-only question would need, it is
+			// reset on every live frame beside `freezeWasUp`, and reading it
+			// costs nothing. Deleting a piece of state to tidy a slice that
+			// re-recorded nothing is how a later measurement loses its
+			// instrument.
 			helpWasUp = helpUp;
 			if (!freezeUp)
 			{
@@ -2205,10 +3031,10 @@ package
 			{
 				dispatchKey(KEY_PRIMARY, false);
 				autoAdvanceHeld = false;
-				// v5 counts arrivals above; counting here too would
-				// double-count a multi-press dialogue, which is the defect
-				// the unification exists to remove.
-				if (tapeVersion < 5) sawAutoAdvance++;
+				// ⛓ R7: the last of the three counting rules, deleted. The
+				// arrival is counted above, for every version; counting here
+				// too would double-count a multi-press dialogue, which is
+				// the defect the unification exists to remove.
 			}
 			autoAdvancePhase++;
 		}

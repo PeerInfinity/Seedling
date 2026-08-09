@@ -389,6 +389,30 @@
 		 * The random seed used by FP's random functions.
 		 */
 		public static function get randomSeed():uint { return _getSeed; }
+
+		/**
+		 * ── R7 (Archipelago-CC bot): THE LIVE LCG STATE ──────────────────
+		 *
+		 * ⛔ `randomSeed`'s GETTER IS NOT THIS. It returns `_getSeed`, which
+		 * only the SETTER above ever writes — `random` and `rand` advance
+		 * `_seed` and leave `_getSeed` exactly where it was. So a hook built
+		 * on the public property answers "the seed as last SET", which after
+		 * one draw is a stale mirror, in a field whose entire purpose is to
+		 * say which position of the stream a run is on.
+		 *
+		 * This is the third of the game's three generators (the gameplay
+		 * LFSR and the cosmetic stream are `Rng`'s), seeded ONCE per page
+		 * from one `Math.random()` in `Engine`'s constructor and never reset.
+		 * It has no gameplay consumer in Seedling — every `FP.choose`/
+		 * `FP.rand` site here feeds a graphic angle, a sprite mirror or a
+		 * particle — so it is carried in the seam signature as declared and
+		 * measured rather than as a behavioural equality.
+		 *
+		 * Read-only, and the WRITE side is the existing setter, which is the
+		 * half of that property that works: it writes `_seed` and syncs
+		 * `_getSeed` behind it.
+		 */
+		public static function get randomSeedLive():uint { return _seed; }
 		public static function set randomSeed(value:uint):void
 		{
 			_seed = clamp(value, 1, 2147483646);

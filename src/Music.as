@@ -658,6 +658,63 @@ package
 		}
 
 		/**
+		 * ── R7: THE NO-REPEAT STATE, READABLE ────────────────────────────
+		 *
+		 * `currentSet` and `currentIndex` are `private static` and they
+		 * decide a DRAW COUNT: `playSound`'s rejection loop below redraws
+		 * while `cplayIndex == currentIndex && sounds[strInd].length > 1 &&
+		 * currentSet == strInd`, so how many `Rng.cos()` draws the next
+		 * indexed sound costs is a function of exactly these two. R7's seam
+		 * signature therefore carries them — and a signature field with no
+		 * accessor is a field nobody can compare.
+		 *
+		 * Read-only getters, changing nothing about the game.
+		 */
+		public static function get currentSetReadout():String { return currentSet; }
+		public static function get currentIndexReadout():int { return currentIndex; }
+
+		/**
+		 * ⛓ …AND WRITABLE, BECAUSE A SEAM THAT CANNOT BE SET CANNOT BE MET.
+		 *
+		 * A segment boots the state its predecessor ended with. Every other
+		 * signature row has a channel that WRITES (the save arrays, the
+		 * persistence clears, both generator states); this pair had neither
+		 * a reader nor a writer, so declaring it read-only would have shipped
+		 * a signature row that is always UNCLAIMED — a field the seam checker
+		 * can report and never satisfy.
+		 *
+		 * ⚠ CALLED FROM `Bot.botStart` ONLY, and only when a v8 tape
+		 * declares a seam, so a build with no such tape takes a byte-
+		 * identical path — the same probe-safety shape as `Rng.setState`.
+		 * The empty set with index -1 is the fresh-page state and writing it
+		 * is inert.
+		 *
+		 * ⛔ It does NOT touch `pinPos`/`pinOpen`/`pinLen`. Those are the
+		 * mixer's own clock, which `botReset` alone forgets (`pinReset`'s
+		 * docblock: a real mixer does not restart because a window ended).
+		 * The no-repeat pair and the pinned channel are different state and
+		 * a writer that conflated them would restart a swim mid-stroke.
+		 */
+		public static function botSetCurrent(strInd:String, i:int):void
+		{
+			currentSet = strInd;
+			currentIndex = i;
+		}
+
+		/** Is `strInd` a sound set? (`Bot.botLoadTape`'s transport bound.) */
+		public static function hasSet(strInd:String):Boolean
+		{
+			return sounds[strInd] != null;
+		}
+
+		/** How many sounds `strInd` holds, or 0. (The index's bound.) */
+		public static function setLength(strInd:String):int
+		{
+			if (sounds[strInd] == null) return 0;
+			return (sounds[strInd] as Array).length;
+		}
+
+		/**
 		 * Plays a sound from a set, such as "Swords", with index intInd (-1 picks a random sound from the set)
 		 * @param	strInd	the set to play from
 		 * @param	intInd	the index of the sound to play (-1 for random other than the one last played)
