@@ -214,18 +214,27 @@ package
 			}
 			else
 			{
-				if ((chunk.set_id as String) != stageSetId)
+				// ⚠ THE OPEN DELIVERY'S VALUES ARE READ INTO LOCALS FIRST.
+				// `resetStaging()` nulls them, and AS3 evaluates the return
+				// expression AFTER the call — so building the message inline
+				// reported `disagrees with "null"` and `disagrees with -1`,
+				// naming the field but not the value it conflicted with. The
+				// verdict was right and the reason was useless, which is the
+				// half of a refusal this arc keeps insisting on.
+				var openId:String = stageSetId;
+				var openCount:int = stageChunkCount;
+				if ((chunk.set_id as String) != openId)
 				{
 					var otherId:String = chunk.set_id as String;
 					resetStaging();
 					return "error:chunk.set_id \"" + otherId + "\" disagrees with \""
-						+ stageSetId + "\" — a delivery must not splice two sets";
+						+ openId + "\" — a delivery must not splice two sets";
 				}
-				if (count != stageChunkCount)
+				if (count != openCount)
 				{
 					resetStaging();
 					return "error:chunk.chunk_count " + count + " disagrees with "
-						+ stageChunkCount;
+						+ openCount;
 				}
 				if (stageSeen[index] == true)
 				{
