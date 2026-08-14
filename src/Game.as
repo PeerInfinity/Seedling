@@ -196,21 +196,21 @@ package
 		End_1, End_Boss, End_2, End_3, End_4);
 		
 		public static const bossMusic:int = 13;
-		public static var levelMusics:Array = new Array(0, 3, 
-		5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-		0,
-		6, 6, 6, 6, 6, 6, -1, 6,
-		7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, -1,
-		0, 0, 0, 0, 0,
-		8, 8, 8, 8, 8, -1,
-		0,
-		0, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, -1, 9,
-		10, 10, 10, 10, 10, 10, 10, 10, 10, 10, -1, 10,
-		11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, -1,
-		0, 11, 11, 0, 0, 0, 0, 0, 0,
-		0, 12, 0, 0, 11, 11,
-		12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
-		5, -1, 5, 5, 5);
+		/**
+		 * The per-room music table, SEEDED from the active set's manifest
+		 * (`LevelSet.seedRuntimeTables`) — plan §3.5 moved this data into the
+		 * level set at phase 3b, and vanilla's copy is `VanillaSet.MUSICS`:
+		 * this literal, cut and pasted rather than retyped.
+		 *
+		 * ⛔ IT STAYS A WRITABLE ARRAY, and that is the whole difficulty of
+		 * moving it. Seven boss classes assign `Game.levelMusics[level]` at
+		 * runtime — `bossMusic` on wake, -1 on death, 14 call sites (§8.2c) —
+		 * so this is STATE initialised from data, not the data itself.
+		 *
+		 * ⚠ Null until the first set becomes active, which happens inside the
+		 * first `loadLevelIndex` — before there is a room to play music in.
+		 */
+		public static var levelMusics:Array = null;
 		
 		/*TILES*/
 		[Embed(source = "../assets/graphics/Grass.png")] private static var imgGrass:Class;
@@ -446,7 +446,7 @@ package
 		/*Main variables*/
 		public static const cheats:Boolean = false;
 		public static var menu:Boolean = true; //Whether or not the game should start as a menu
-		public static const menuLevels:Array = new Array(12, 37, 44, 87, 88, 89);
+		// menuLevels moved to the manifest, phase 3b: `LevelSet.active().menuRoom()`.
 		private static var menuIndex:int = 0;
 		private const restartKey:int = Key.R;
 		private const escapeKey:int = Key.ESCAPE;
@@ -771,7 +771,7 @@ package
 			
 			if (menu)
 			{
-				loadLevelIndex(menuLevels[menuIndex]);
+				loadLevelIndex(LevelSet.active().menuRoom(menuIndex));
 				cameraTarget = new Point((FP.width - FP.screen.width) * (menuIndex % 2), (FP.height - FP.screen.height) * (menuIndex % 2));
 				FP.camera = cameraTarget.clone();
 				//trace(menuLevels[menuIndex] + ": " + FP.camera.x + ", " + FP.camera.y);
@@ -793,7 +793,7 @@ package
 						Music.playSound("Wind", 0);
 						cutscene[0] = true;
 					}
-					level = 0;
+					LevelSet.active().applyStart(this);
 				}
 				loadLevelIndex(level);
 			}
@@ -905,7 +905,7 @@ package
 			if (p && classCount(Help) <= 0)
 			{
 				//Managing snow alpha in the level (Dungeon5/Entrance) where the snow gets intense
-				if (level == 45 /* Dungeon5/Entrance.oel */) snowAlpha = DEFAULT_SNOW_ALPHA * Math.pow(1 - p.y / FP.height, 2);
+				if (LevelSet.active().hasSnowGradient(level)) snowAlpha = DEFAULT_SNOW_ALPHA * Math.pow(1 - p.y / FP.height, 2);
 				else snowAlpha = DEFAULT_SNOW_ALPHA;
 				
 				// The starting wind/text scene.
@@ -1172,13 +1172,13 @@ package
 				Music.fadeToLoop(Music.sndOMenu);
 			if (!menu)
 			{
-				if (Main.hasSword && !Main.hasShield && levelMusics[level] == 5 /* Watcher song */ && level != 10)
+				if (Main.hasSword && !Main.hasShield && levelMusics[level] == 5 /* Watcher song */ && !LevelSet.active().isMusicExempt(level))
 				{
 					Music.stop(false, true, true);
 				}
 				else
 				{
-					if (!Main.hasSword && (levelMusics[level] == 5 || levelMusics[level] == 0) && level != 10)
+					if (!Main.hasSword && (levelMusics[level] == 5 || levelMusics[level] == 0) && !LevelSet.active().isMusicExempt(level))
 					{
 						if(!Music.songs[4].playing)
 							Music.fadeToLoop(Music.songs[4], 0.05);
@@ -1291,7 +1291,7 @@ package
 				if (cameraTarget.x > FP.width - FP.screen.width || cameraTarget.x < -1 || cameraTarget.y > FP.height - FP.screen.height || cameraTarget.y < -1)
 				{
 					undrawCover();
-					menuIndex = (menuIndex + 1) % menuLevels.length;
+					menuIndex = (menuIndex + 1) % LevelSet.active().menuRoomCount();
 					FP.world = new Game(level, playerPosition.x, playerPosition.y);
 					return;
 				}
@@ -2335,9 +2335,7 @@ package
 		 */
 		public static function levelCount():int
 		{
-			return LevelSet.mounted == null
-				? levels.length
-				: LevelSet.mounted.rooms.length;
+			return LevelSet.active().rooms.length;
 		}
 
 		/**
@@ -2389,16 +2387,25 @@ package
 					level = index;
 			}
 
-			if (LevelSet.mounted == null)
+			// ⛓ PHASE 3b — TWO RESOLVERS, ONE LOADER, AND NO VANILLA BRANCH.
+			// The built-in set carries the compiled-in `[Embed]` Class and a
+			// delivered set carries XML text; both end in `loadLevelXML`, three
+			// lines apart. `loadlevel(Class)` is the embed resolver the
+			// original wrote and phase 3 left alone, so the ordinary game takes
+			// exactly the path it always took — through the level set, which is
+			// what makes every boot a test of the loader (§4.3).
+			var set:LevelSet = LevelSet.active();
+			var embed:Class = set.embedFor(index);
+			if (embed != null)
 			{
-				loadlevel(levels[index]);
+				loadlevel(embed);
 				return;
 			}
 
-			// A mounted set cannot contain an unservable room —
-			// `LevelSet.acceptChunk` refuses the whole delivery over one. If
-			// that ever stops being true this must be heard, not guessed at.
-			var xmlText:String = LevelSet.mounted.xmlFor(index);
+			// A set cannot contain an unservable room — `acceptChunk` refuses
+			// the whole delivery over one, and `VanillaSet.build` gives every
+			// room a Class. If that ever stops being true it must be heard.
+			var xmlText:String = set.xmlFor(index);
 			if (xmlText == null)
 			{
 				levelSetError = "mounted room " + index + " has no XML";
