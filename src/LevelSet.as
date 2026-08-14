@@ -149,7 +149,7 @@ package
 		 * valid — a verdict disagreement, which is the thing being avoided.
 		 * Room `id` is the authority for placement either way (§9.1).
 		 */
-		public static function acceptChunk(chunk:Object):String
+		public static function acceptChunk(chunk:Object, maxRooms:int = -1):String
 		{
 			if (chunk == null)
 				return "error:chunk must be an object";
@@ -291,6 +291,20 @@ package
 						+ " with no gaps";
 				}
 				assembled.push(stageRoomById[i]);
+			}
+			// ⛔ A SET BIGGER THAN THE PERSISTENCE TABLE IS REFUSED, because the
+			// table is still sized from the compiled-in `Game.levels.length`
+			// (`Main.as:319`) until plan phase 4 lands. Rows past its end read
+			// as *every tag already cleared* and the game reports itself
+			// healthy — §8.3 drove exactly that at levels 116 and 200. The
+			// caller passes the capacity it measured; -1 means unbounded and
+			// is for tests that are not about persistence.
+			if (maxRooms >= 0 && assembled.length > maxRooms)
+			{
+				var tooMany:int = assembled.length;
+				resetStaging();
+				return "error:set has " + tooMany + " rooms but the persistence"
+					+ " table addresses " + maxRooms + " (plan phase 4 lifts this)";
 			}
 			// A room this build cannot serve is refused HERE rather than at the
 			// moment the player walks into it. ⚠ The sender's validator calls an

@@ -749,6 +749,15 @@ package
 				// can tell the latch fired; the block itself is inert by
 				// construction for every caller that does not ask.
 				ExternalInterface.addCallback("botSeam", botSeam);
+				// ⚠ THIS BLOCK SHIFTS THIS FILE BY +9 FROM HERE DOWN, and that
+				// is the whole line-number cost of seam 3 (plan §4.4/§4.5):
+				// measured 2026-08-13, 46 of the 55 `Bot.as:NNN` citations in
+				// the model sit at :752 or beyond and are now NNN + 9. Their
+				// own callbacks, on `botMobiles`' precedent — every existing
+				// caller polls `botStatus` and is byte-inert past this commit
+				// by construction.
+				ExternalInterface.addCallback("botLoadLevels", botLoadLevels);
+				ExternalInterface.addCallback("botLevelSet", botLevelSet);
 			}
 			catch (e:Error)
 			{
@@ -3148,6 +3157,99 @@ package
 			FP.stage.dispatchEvent(new KeyboardEvent(
 				down ? KeyboardEvent.KEY_DOWN : KeyboardEvent.KEY_UP,
 				true, false, 0, code));
+		}
+
+		/**
+		 * ── THE LEVEL-SET TRANSPORT (plan §4.4 seam 3) ───────────────────
+		 *
+		 * Appended at the end of the class so that the ONLY line-number shift
+		 * this seam costs is the registration block above (+9 from :752).
+		 */
+
+		/**
+		 * How many levels the persistence table can actually address, read
+		 * from the table itself rather than assumed — `Main.as:319` builds it
+		 * once, `SAVE_FILE` keeps it forever, and a save written by an earlier
+		 * build can therefore be a different size from `Game.levels.length`.
+		 * The runtime prints its length at boot (`NO LEVEL PERSISTENCE: 3480`
+		 * = 116 x 30, §8.3).
+		 */
+		private static function persistenceLevelCapacity():int
+		{
+			var table:Array = Main.SAVE_FILE == null
+				? null
+				: Main.SAVE_FILE.data.levelPersistence as Array;
+			if (table == null || table.length < Game.tagsPerLevel)
+				return Game.levels.length;
+			return int(table.length / Game.tagsPerLevel);
+		}
+
+		/**
+		 * botLoadLevels — deliver ONE chunk of an external level set.
+		 *
+		 * Wire format: `frontend/schema/seedling-level-set-chunk.schema.json`,
+		 * frozen at schema_version 1 (plan §9). Returns:
+		 *
+		 *   "pending"    accepted; more chunks are owed, nothing is mounted
+		 *   "ok"         this chunk COMPLETED the delivery and the set is
+		 *                mounted — `Game.levelCount()` now answers from it
+		 *   "error:..."  refused BY NAME, and the whole staged delivery is
+		 *                dropped
+		 *
+		 * ⛔ ONE CHUNK PER CALL IS NOT A STYLE CHOICE. A whole vanilla bundle
+		 * is 1,676,662 B of JSON and ABORTS the runtime: `heap_alloc` fails
+		 * inside the 0.5 GB AVM2 arena somewhere between 1,264,992 B (80
+		 * rooms, survives) and 1,353,464 B (88 rooms, aborts), while 2 MB of
+		 * JSON-legal whitespace crosses fine — so what binds is the parsed
+		 * object graph, not the bytes (§8.1). The sender's chunker bounds on
+		 * rooms AND bytes; this side cannot help with that, because an
+		 * oversized chunk dies inside `JSON.parse` before this function's
+		 * first line runs, and after one abort every later reading in the
+		 * page is fiction (no stack cookie).
+		 *
+		 * ⚠ A MOUNT DOES NOT RELOAD THE WORLD the player is standing in. The
+		 * new table is consulted by the next `loadLevelIndex`. Deliver before
+		 * `botStart`, which is what the harness does; a mid-run swap is not
+		 * something this phase claims to support.
+		 */
+		public static function botLoadLevels(json:String):String
+		{
+			var chunk:Object;
+			try
+			{
+				chunk = JSON.parse(json);
+			}
+			catch (e:Error)
+			{
+				LevelSet.resetStaging();
+				return "error:chunk is not JSON (" + e.message + ")";
+			}
+			return LevelSet.acceptChunk(chunk, persistenceLevelCapacity());
+		}
+
+		/**
+		 * botLevelSet — what is mounted, what is in flight, and what was last
+		 * refused.
+		 *
+		 * ⛔ ITS OWN CALLBACK RATHER THAN A FIELD ON `botStatus`, on the
+		 * `botMobiles`/`botSeam` precedent and for the same reason: every
+		 * existing caller polls `botStatus` on the update thread, and a
+		 * caller that does not ask for this pays nothing.
+		 *
+		 * It also exists so that `Game.loadLevelIndex`'s clamp can be
+		 * OBSERVED. A backstop nothing can read is a claim that cannot fail.
+		 */
+		public static function botLevelSet():String
+		{
+			return JSON.stringify({
+				mounted: LevelSet.mounted == null ? null : LevelSet.mounted.setId,
+				rooms: Game.levelCount(),
+				built_in: Game.levels.length,
+				capacity: persistenceLevelCapacity(),
+				staged: LevelSet.stagedChunks(),
+				staged_of: LevelSet.stagedChunkCount(),
+				error: Game.levelSetError
+			});
 		}
 	}
 }
