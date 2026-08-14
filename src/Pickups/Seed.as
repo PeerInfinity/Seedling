@@ -70,7 +70,7 @@ package Pickups
 					if (bloody)
 					{
 						Game.cutscene[1] = true;
-						FP.world = new Game(1, 64, 96, false);
+						FP.world = new Game(LevelSet.active().namedLevel("bloody_seed_ending"), LevelSet.active().namedX("bloody_seed_ending"), LevelSet.active().namedY("bloody_seed_ending"), false);
 					}
 					else if (tree)
 					{

@@ -488,7 +488,7 @@ package
 					Main.unlockMedal(Main.badges[13]);
 					Game.menu = true;
 					Game.cutscene[1] = false;
-					FP.world = new Game(114, 72, 128, false, 2);
+					FP.world = new Game(LevelSet.active().namedLevel("dark_shrum_death"), LevelSet.active().namedX("dark_shrum_death"), LevelSet.active().namedY("dark_shrum_death"), false, 2);
 				}
 			}
 			

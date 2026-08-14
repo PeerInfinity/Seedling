@@ -101,7 +101,7 @@ package Enemies
 		
 		public function endState():void
 		{
-			FP.world.add(new Teleporter(x, y, 36, 112, 96, true));
+			FP.world.add(new Teleporter(x, y, LevelSet.active().namedLevel("light_boss_exit"), LevelSet.active().namedX("light_boss_exit"), LevelSet.active().namedY("light_boss_exit"), true));
 			Game.levelMusics[(FP.world as Game).level] = -1;
 			Game.setPersistence(tag, false);
 		}

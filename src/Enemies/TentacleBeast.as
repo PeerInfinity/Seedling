@@ -210,7 +210,7 @@ package Enemies
 		
 		public function createMouthEntrance():void
 		{
-			FP.world.add(new Teleporter(x - Tile.w / 2, y - Tile.h / 2, 58, 56, 96));
+			FP.world.add(new Teleporter(x - Tile.w / 2, y - Tile.h / 2, LevelSet.active().namedLevel("tentacle_beast_mouth"), LevelSet.active().namedX("tentacle_beast_mouth"), LevelSet.active().namedY("tentacle_beast_mouth")));
 		}
 		
 	}

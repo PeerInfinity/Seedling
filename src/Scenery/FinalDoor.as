@@ -47,7 +47,7 @@ package Scenery
 		
 		override public function update():void
 		{
-			var talkedToWatcher:Boolean = !Game.checkPersistence(0, 114); //0 is the tag for the Watcher's text, while 114 is the room that it refers to.
+			var talkedToWatcher:Boolean = !Game.checkPersistence(0, LevelSet.active().namedLevel("watcher_text")); //0 is the tag for the Watcher's text; the room it refers to is the set's, vanilla 114.
 			var p:Player = FP.world.nearestToEntity("Player", this) as Player;
 			if (p)
 			{
