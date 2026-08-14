@@ -971,7 +971,7 @@ package
 							return "error:persistence[" + j + "] must be {level, tag, note}";
 						var cl:int = int(c.level);
 						var ct:int = int(c.tag);
-						if (cl < 0 || cl >= Game.levels.length)
+						if (cl < 0 || cl >= Game.levelCount())
 							return "error:persistence[" + j + "].level " + cl
 								+ " is not a level";
 						// ⚠ A NEGATIVE TAG IS NOT "no tag" HERE. Entities use
@@ -1443,6 +1443,26 @@ package
 					return "error:tick_count " + count + " is shorter than the "
 						+ "longest span end " + maxTo;
 
+				// ⛔ THE BOOT LEVEL, WHICH HAD NO CHECK AT ALL — the gap plan
+				// §8.3 drove. This same parser has bounded
+				// `persistence[].level` since R3 (:974), and `boot.level` went
+				// straight to `new Game(bootLevel, …)`: booted at 116 and at
+				// 200 the game answered load `ok`, start `ok`, stayed alive,
+				// reported itself healthy through `botStatus`, and read all
+				// thirty of the nonexistent level's persistence tags as
+				// ALREADY CLEARED. One defect with two implementations — the
+				// model's `tapeFormat.parsePersistence` has the same asymmetry
+				// (plan §6) and this is only the AS3 half.
+				//
+				// ⚠ ABOVE THE COMMIT BLOCK BELOW, not inside it: every other
+				// refusal in this function returns before a single static is
+				// assigned, and a half-configured bot is worse than a rejected
+				// tape.
+				var bootAt:int = int(t.boot.level);
+				if (bootAt < 0 || bootAt >= Game.levelCount())
+					return "error:boot.level " + bootAt + " is not a level"
+						+ " (0.." + (Game.levelCount() - 1) + ")";
+
 				spanCode = codes;
 				spanFrom = froms;
 				spanTo = tos;
@@ -1583,7 +1603,7 @@ package
 			// dependence gets in.
 			if (persistLevel.length > 0)
 			{
-				var levelCount:int = Game.levels.length;
+				var levelCount:int = Game.levelCount();
 				for (var li:int = 0; li < levelCount; li++)
 				{
 					for (var ti:int = 0; ti < Game.tagsPerLevel; ti++)
@@ -1858,7 +1878,7 @@ package
 		private static function persistenceClearedAll():Array
 		{
 			var out:Array = new Array();
-			for (var lv:int = 0; lv < Game.levels.length; lv++)
+			for (var lv:int = 0; lv < Game.levelCount(); lv++)
 			{
 				for (var tg:int = 0; tg < Game.tagsPerLevel; tg++)
 				{
