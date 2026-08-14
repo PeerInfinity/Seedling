@@ -102,13 +102,19 @@ package
 		 * ⛓ MOVED FROM `Game.as:908` (`if (level == 45)`) — the rooms whose
 		 * snow alpha scales with the player's height up the screen.
 		 */
-		public static const SNOW_GRADIENT_ROOMS:Array = new Array(45);
+		// ⛔ BRACKETS, NOT `new Array(45)`. A single INTEGER argument is a
+		// LENGTH, not an element: `new Array(45)` is 45 empty slots, so
+		// `indexOf(45)` is -1 and room 45 loses its snow. Caught by
+		// `check-seedling-vanilla-manifest.mjs` on its first run — `[] vs [45]`
+		// — which is the whole reason the manifest is read back out of the
+		// built artifact rather than trusted from the source.
+		public static const SNOW_GRADIENT_ROOMS:Array = [45];
 
 		/**
 		 * ⛓ MOVED FROM `Game.as:1175` and `:1181` (`level != 10`) — the rooms
 		 * exempt from BOTH sword/shield music overrides.
 		 */
-		public static const MUSIC_EXEMPT_ROOMS:Array = new Array(10);
+		public static const MUSIC_EXEMPT_ROOMS:Array = [10]; // brackets — see above
 
 		/**
 		 * ⛓ The six room references that live in CODE and that no bundle
