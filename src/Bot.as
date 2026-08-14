@@ -3261,6 +3261,7 @@ package
 		 */
 		public static function botLevelSet():String
 		{
+			var set:LevelSet = LevelSet.active();
 			return JSON.stringify({
 				mounted: LevelSet.mounted == null ? null : LevelSet.mounted.setId,
 				rooms: Game.levelCount(),
@@ -3268,8 +3269,103 @@ package
 				capacity: persistenceLevelCapacity(),
 				staged: LevelSet.stagedChunks(),
 				staged_of: LevelSet.stagedChunkCount(),
-				error: Game.levelSetError
+				error: Game.levelSetError,
+				// ── phase 3b: the MANIFEST, so the deletion can be checked ──
+				//
+				// ⛔ READ THROUGH THE ACCESSORS THAT REPLACED THE LITERALS, not
+				// off `meta`. THREE OF THE EIGHT DELETED SITES CANNOT EXECUTE IN
+				// THIS ARTIFACT: `Main.as:50` sets `Game.menu = false` and
+				// `:51` boots `new Game(0, 80, 128)`, so the title-screen path
+				// (`menuRoom`, `menuRoomCount`) and the new-game path
+				// (`applyStart`, taken only when `level < 0`) are both dead
+				// here — no tape can reach them, because `Bot` always boots an
+				// explicit level. Reporting `meta.menu_rooms` would prove the
+				// DATA survived and say nothing about the code that reads it.
+				// Calling the accessors leaves only the one-line call-site
+				// substitution in `Game.as` unexercised, and that is visible in
+				// the diff. `applyStart` cannot be called from a readout (it
+				// mutates a `Game`), so `start_level` exercises the getter it
+				// is built on and the residue is declared in the plan.
+				active: set.setId,
+				musics: manifestMusics(set),
+				musics_live: Game.levelMusics,
+				menu_rooms: menuRoomsVia(set),
+				menu_room_count: set.menuRoomCount(),
+				start_level: set.startLevel,
+				named_rooms: namedRoomsVia(set),
+				snow_rooms: roomsWhere(set, true),
+				music_exempt_rooms: roomsWhere(set, false)
 			});
+		}
+
+		/** `menuRoom(0..menuRoomCount-1)` — the title-screen cycle, resolved. */
+		private static function menuRoomsVia(set:LevelSet):Array
+		{
+			var out:Array = new Array();
+			for (var i:int = 0; i < set.menuRoomCount(); i++)
+				out.push(set.menuRoom(i));
+			return out;
+		}
+
+		/**
+		 * Every `named_rooms` entry, resolved through `namedLevel`/`namedX`/
+		 * `namedY`.
+		 *
+		 * ⚠ THE NAMES ARE READ OFF THE SET, NOT LISTED HERE. The vocabulary is
+		 * closed and the validator owns it; restating the six names in this
+		 * file would be a second copy that can disagree with the first, which
+		 * is the whole failure mode this arc keeps finding.
+		 */
+		private static function namedRoomsVia(set:LevelSet):Object
+		{
+			var out:Object = {};
+			var names:Object = set.meta == null ? null : set.meta.named_rooms;
+			if (names == null)
+				return out;
+			for (var name:String in names)
+				out[name] = {
+					level: set.namedLevel(name),
+					x: set.namedX(name),
+					y: set.namedY(name)
+				};
+			return out;
+		}
+
+		/**
+		 * The ACTIVE set's per-room music, straight off the manifest.
+		 *
+		 * ⛓ REPORTED BESIDE `Game.levelMusics` ON PURPOSE, and the pair is the
+		 * point: the manifest is the data, `levelMusics` is the copy the
+		 * bosses write, and a gate that read only one of them could not tell a
+		 * mistranscribed manifest from a seeding bug that never ran. Read at
+		 * boot, before any boss has woken, the two must be equal AND equal to
+		 * the committed JSON twin.
+		 */
+		private static function manifestMusics(set:LevelSet):Array
+		{
+			var out:Array = new Array();
+			for (var i:int = 0; i < set.rooms.length; i++)
+			{
+				var room:Object = set.rooms[i];
+				out.push(room == null || room.music == null ? null : int(room.music));
+			}
+			return out;
+		}
+
+		/**
+		 * The ids carrying a per-room manifest flag, in order — asked of
+		 * `hasSnowGradient`/`isMusicExempt` rather than read off the room
+		 * objects, so this reports what `Game.update` would see.
+		 */
+		private static function roomsWhere(set:LevelSet, snow:Boolean):Array
+		{
+			var out:Array = new Array();
+			for (var i:int = 0; i < set.rooms.length; i++)
+			{
+				if (snow ? set.hasSnowGradient(i) : set.isMusicExempt(i))
+					out.push(i);
+			}
+			return out;
 		}
 	}
 }
