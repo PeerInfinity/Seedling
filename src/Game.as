@@ -2377,6 +2377,16 @@ package
 					+ " (0.." + (count - 1) + ")";
 				trace("LEVEL SET REFUSED: " + levelSetError);
 				index = 0;
+				// ⛔ AND THE GAME MUST KNOW WHICH ROOM IT IS ACTUALLY IN.
+				// `level` is a getter/setter over `Main.level` (:526), which
+				// is what the persistence rows are indexed by. A clamp that
+				// loaded room 0 while `level` still said 200 would leave the
+				// player standing in one room with another room's thirty
+				// flags — the exact confusion §8.3 is about, arrived at from
+				// the other side. The menu arm is exempt: it loads title
+				// rooms without owning `level`.
+				if (!menu)
+					level = index;
 			}
 
 			if (LevelSet.mounted == null)
