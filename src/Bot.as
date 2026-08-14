@@ -757,7 +757,7 @@ package
 				// caller polls `botStatus` and is byte-inert past this commit
 				// by construction.
 				ExternalInterface.addCallback("botLoadLevels", botLoadLevels);
-				ExternalInterface.addCallback("botLevelSet", botLevelSet);
+				ExternalInterface.addCallback("botLevelSet", botLevelSet); ExternalInterface.addCallback("botForgeSaveStamp", botForgeSaveStamp);
 			}
 			catch (e:Error)
 			{
@@ -3194,16 +3194,6 @@ package
 		 * The runtime prints its length at boot (`NO LEVEL PERSISTENCE: 3480`
 		 * = 116 x 30, §8.3).
 		 */
-		private static function persistenceLevelCapacity():int
-		{
-			var table:Array = Main.SAVE_FILE == null
-				? null
-				: Main.SAVE_FILE.data.levelPersistence as Array;
-			if (table == null || table.length < Game.tagsPerLevel)
-				return Game.levels.length;
-			return int(table.length / Game.tagsPerLevel);
-		}
-
 		/**
 		 * botLoadLevels — deliver ONE chunk of an external level set.
 		 *
@@ -3244,7 +3234,7 @@ package
 				LevelSet.resetStaging();
 				return "error:chunk is not JSON (" + e.message + ")";
 			}
-			return LevelSet.acceptChunk(chunk, persistenceLevelCapacity());
+			return LevelSet.acceptChunk(chunk);
 		}
 
 		/**
@@ -3266,10 +3256,28 @@ package
 				mounted: LevelSet.mounted == null ? null : LevelSet.mounted.setId,
 				rooms: Game.levelCount(),
 				built_in: Game.levels.length,
-				capacity: persistenceLevelCapacity(),
+				capacity: Main.levelPersistenceLevels(),
 				staged: LevelSet.stagedChunks(),
 				staged_of: LevelSet.stagedChunkCount(),
 				error: Game.levelSetError,
+				// ── phase 4: the SAVE, and the table it carries ────────────
+				//
+				// ⛔ THE TABLE IS INVISIBLE TO EVERY OTHER WITNESS. A
+				// persistence row is not a position, a level or an entity, so
+				// it appears in no observation stream unless something
+				// despawns because of it — the same blind spot that hid
+				// `new Array(45)` from 153 tapes (plan §11.3). It is reported
+				// here so a gate can diff the live table against what the
+				// mounted set says it should be.
+				//
+				// `save_cleared` is the FALSE entries, "level:tag" each: a
+				// fresh table is empty, and in this polarity every entry it
+				// does list is an entity the game will not spawn.
+				save_set: Main.levelSetOnSave,
+				save_reset: Main.levelSetReset,
+				table_levels: Main.levelPersistenceLevels(),
+				table_length: Main.persistenceTableLength(),
+				save_cleared: Main.persistenceClearedList(),
 				// ── phase 3b: the MANIFEST, so the deletion can be checked ──
 				//
 				// ⛔ READ THROUGH THE ACCESSORS THAT REPLACED THE LITERALS, not
@@ -3296,6 +3304,35 @@ package
 				snow_rooms: roomsWhere(set, true),
 				music_exempt_rooms: roomsWhere(set, false)
 			});
+		}
+
+		/**
+		 * botForgeSaveStamp — overwrite the level-set stamp on the save.
+		 *
+		 * ⛔ A TEST LEVER, AND ITS NAME SAYS SO. Nothing in the game calls it
+		 * and nothing should: it FORGES a save state rather than reaching one
+		 * by playing.
+		 *
+		 * ⛓ IT EXISTS BECAUSE ONE BRANCH OF `LevelSet.reconcileSave` IS
+		 * OTHERWISE UNREACHABLE IN THIS ARTIFACT. An UNSTAMPED save whose
+		 * table already fits the set being mounted is ADOPTED rather than
+		 * destroyed — the case of a save written by a build older than phase
+		 * 4, which is the difference between an existing player keeping their
+		 * progress across the upgrade and losing it. This runtime models
+		 * SharedObject in process and does NOT persist it to a .sol
+		 * (`avm2_amf.c:1907`), so no save here can predate anything and that
+		 * branch can never arise by itself. Forging the stamp to "" and
+		 * re-delivering the same set drives exactly it.
+		 *
+		 * The alternative was to leave the branch declared-unexercised. A rule
+		 * that decides whether saves survive an upgrade is worth a lever.
+		 */
+		public static function botForgeSaveStamp(id:String):String
+		{
+			if (Main.SAVE_FILE == null)
+				return "error:no save file";
+			Main.levelSetOnSave = id == null ? "" : id;
+			return Main.levelSetOnSave;
 		}
 
 		/** `menuRoom(0..menuRoomCount-1)` — the title-screen cycle, resolved. */

@@ -229,7 +229,7 @@ package
 		 */
 		public static function startSave():void
 		{
-			hasSword = hasSword;
+			insideStartSave = true; LevelSet.active(); hasSword = hasSword;
 			hasGhostSword = hasGhostSword;
 			hasShield = hasShield;
 			hasFire = hasFire;
@@ -316,28 +316,150 @@ package
 					hasSealPartSet(i, hasSealPart(i));
 				}
 			}
-			if (!SAVE_FILE.data.levelPersistence)
-			{
-				var tempPersistence:Array = new Array();
-				for (i = 0; i < Game.levels.length; i++)
-				{
-					for (var j:int = 0; j < Game.tagsPerLevel; j++)
-					{
-						tempPersistence.push(true);
-					}
-				}
-				SAVE_FILE.data.levelPersistence = tempPersistence;
-				trace("NO LEVEL PERSISTENCE:   " + SAVE_FILE.data.levelPersistence.length)
-			}
+			/* ⛓ THE PERSISTENCE TABLE MOVED, and it is built EARLIER than this
+			 * line now — see `LevelSet.reconcileSave` (plan §4.2). It used to
+			 * be `Game.levels.length * tagsPerLevel` booleans created here iff
+			 * absent, which sized the save to the COMPILED-IN room count and
+			 * could never notice that the save belonged to a different set.
+			 *   ⛔ It cannot be built from here any more: a mounted set is the
+			 * authority for the length, the save has to be judged against that
+			 * set BEFORE the fields above are re-read, and `printItems()` — the
+			 * next thing `begin()` calls — already reads the table. So the
+			 * FIRST statement here asks for the active set, whose constructor
+			 * reconciles; the last drops the re-entry guard that lets a wipe
+			 * re-enter this from a runtime mount. Both ride on EXISTING lines:
+			 * §4.5's property is ZERO SHIFT, and this file is cited 88 times. */
 			
 			playerPositionX = playerPositionX;
 			playerPositionY = playerPositionY;
 			level = level;
 			
-			READY_TO_SUBMIT_BADGES = true;
+			READY_TO_SUBMIT_BADGES = true; insideStartSave = false;
 		}
-		
-		
+
+		// ─────────────────────────────────────────────────────────────────
+		// PHASE 4 — the save belongs to a LEVEL SET (plan §4.2).
+		//
+		// ⛔ APPENDED AT THE END OF THE CLASS, deliberately. §4.5's property
+		// is ZERO SHIFT, not "new fields at the end of the declaration block"
+		// — this file is cited by line 88 times in the model, and putting
+		// these beside their neighbours at :20 would invalidate every one of
+		// those citations exactly as silently as a re-flow would (the reading
+		// phase 3 had to correct, plan §10.1).
+		// ─────────────────────────────────────────────────────────────────
+
+		/**
+		 * The set the save on disk was written under, or "" if it predates
+		 * this phase. `set_id` ENDS WITH the content hash of the set document
+		 * (plan §9.1 rule 2), so this one string carries both halves of the
+		 * stamp §4.2 asks for: an edited set reusing its name is already a
+		 * different id, by the sender's construction.
+		 */
+		public static function get levelSetOnSave():String
+		{
+			if (SAVE_FILE == null || SAVE_FILE.data.levelSetId == null) return "";
+			return String(SAVE_FILE.data.levelSetId);
+		}
+		public static function set levelSetOnSave(s:String):void { SAVE_FILE.data.levelSetId = s; }
+
+		/**
+		 * Why the save was last thrown away, or "" if it never was.
+		 *
+		 * ⛔ ITS OWN FIELD, NOT `Game.levelSetError`. That one means "a
+		 * delivery was REFUSED", and the transport probe reads it as exactly
+		 * that. A reset is the opposite — the delivery was accepted and the
+		 * save could not come with it — so borrowing that channel would make a
+		 * healthy mount read as a refusal and would disarm the gate that
+		 * checks refusals. Two outcomes, two channels.
+		 */
+		public static var levelSetReset:String = "";
+
+		/**
+		 * ⛔ Re-entry guard. A runtime mount reconciles from inside
+		 * `LevelSet`'s constructor and may wipe the save, which then needs
+		 * `startSave()` to re-initialise every field. On the BOOT path that
+		 * same constructor runs from inside `startSave()` itself, and calling
+		 * it again there would recurse forever.
+		 */
+		private static var insideStartSave:Boolean = false;
+
+		/** `levelCount * tagsPerLevel` booleans, all true = nothing cleared. */
+		public static function buildLevelPersistence(levelCount:int):void
+		{
+			var table:Array = new Array();
+			for (var i:int = 0; i < levelCount * Game.tagsPerLevel; i++)
+				table.push(true);
+			SAVE_FILE.data.levelPersistence = table;
+		}
+
+		/**
+		 * Throw the save away and start a fresh one belonging to `setId`.
+		 *
+		 * ⛔ THE WHOLE SAVE, NOT THE TABLE. `level` and `playerPositionX/Y`
+		 * are as set-relative as any persistence row — resuming at index 37 of
+		 * a set that never had a room 37, or at (240, 256) in a room whose
+		 * geometry is different, is the same silent reinterpretation §4.2
+		 * exists to prevent, and the plan's rule named only the table.
+		 */
+		public static function freshSaveForLevelSet(setId:String, levelCount:int, reason:String):void
+		{
+			SAVE_FILE.clear();
+			// ⚠ RE-OPENED, following `begin()`'s own precedent: the original
+			// `clearSave()` calls `clear()` and then goes back through
+			// `SharedObject.getLocal`, so nothing here assumes `data` is still
+			// a usable object afterwards. Cheap, and the alternative is trusting
+			// an emulated SharedObject to behave like the spec.
+			SAVE_FILE = SharedObject.getLocal(SAVE_NAME);
+			Inventory.clearItems();
+			buildLevelPersistence(levelCount);
+			levelSetOnSave = setId;
+			levelSetReset = reason;
+			trace("LEVEL SET RESET: " + reason);
+			// Every other field is re-read by `startSave`, which is already
+			// running when this is the boot path (see the guard above).
+			if (!insideStartSave)
+				startSave();
+		}
+
+		/** Levels the persistence table addresses; 0 when there is no table. */
+		public static function levelPersistenceLevels():int
+		{
+			if (SAVE_FILE == null) return 0;
+			var table:Array = SAVE_FILE.data.levelPersistence as Array;
+			if (table == null) return 0;
+			return int(table.length / Game.tagsPerLevel);
+		}
+
+		/** Raw booleans in the table; -1 when there is none. */
+		public static function persistenceTableLength():int
+		{
+			if (SAVE_FILE == null) return -1;
+			var table:Array = SAVE_FILE.data.levelPersistence as Array;
+			return table == null ? -1 : table.length;
+		}
+
+		/**
+		 * Every CLEARED slot, "level:tag" each — the readout the phase 4 gate
+		 * diffs (`Bot.botLevelSet`).
+		 *
+		 * ⛓ THE FALSE ENTRIES, not the true ones, because the polarity makes
+		 * that the short list AND the meaningful one: `true` is the default a
+		 * fresh table is full of, and every `false` is an entity the game will
+		 * refuse to spawn. A fresh table reports [].
+		 */
+		public static function persistenceClearedList():Array
+		{
+			var out:Array = new Array();
+			if (SAVE_FILE == null) return out;
+			var table:Array = SAVE_FILE.data.levelPersistence as Array;
+			if (table == null) return out;
+			for (var i:int = 0; i < table.length; i++)
+			{
+				if (!table[i])
+					out.push(int(i / Game.tagsPerLevel) + ":" + (i % Game.tagsPerLevel));
+			}
+			return out;
+		}
 	}
 	
 }

@@ -97,6 +97,7 @@ package
 			rooms = roomsInOrder;
 			meta = metadata;
 			seedRuntimeTables();
+			reconcileSave();
 		}
 
 		/**
@@ -191,7 +192,7 @@ package
 		 * valid — a verdict disagreement, which is the thing being avoided.
 		 * Room `id` is the authority for placement either way (§9.1).
 		 */
-		public static function acceptChunk(chunk:Object, maxRooms:int = -1):String
+		public static function acceptChunk(chunk:Object):String
 		{
 			if (chunk == null)
 				return "error:chunk must be an object";
@@ -343,20 +344,18 @@ package
 				}
 				assembled.push(stageRoomById[i]);
 			}
-			// ⛔ A SET BIGGER THAN THE PERSISTENCE TABLE IS REFUSED, because the
-			// table is still sized from the compiled-in `Game.levels.length`
-			// (`Main.as:319`) until plan phase 4 lands. Rows past its end read
-			// as *every tag already cleared* and the game reports itself
-			// healthy — §8.3 drove exactly that at levels 116 and 200. The
-			// caller passes the capacity it measured; -1 means unbounded and
-			// is for tests that are not about persistence.
-			if (maxRooms >= 0 && assembled.length > maxRooms)
-			{
-				var tooMany:int = assembled.length;
-				resetStaging();
-				return "error:set has " + tooMany + " rooms but the persistence"
-					+ " table addresses " + maxRooms + " (plan phase 4 lifts this)";
-			}
+			// ⛓ THE CAPACITY REFUSAL IS GONE — PHASE 4 LIFTED IT, as phase 3
+			// said it would. A set bigger than the persistence table used to be
+			// refused here because the table was sized from the compiled-in
+			// `Game.levels.length` and rows past its end read as *every tag
+			// already cleared* while the game reported itself healthy (§8.3).
+			// The table is now built from the MOUNTED set — `reconcileSave()`
+			// below, called from the constructor — so a set of any size gets a
+			// table that addresses it, and there is nothing left to refuse.
+			// ⚠ AND THE PARAMETER WENT WITH IT. An ignored `maxRooms` would be
+			// an argument every caller still computes and nobody reads — the
+			// rule is gone, so its input is gone; `Bot.persistenceLevelCapacity`
+			// went too, its job now being `Main.levelPersistenceLevels()`.
 			// A room this build cannot serve is refused HERE rather than at the
 			// moment the player walks into it. ⚠ The sender's validator calls an
 			// `embed` room valid and merely unchecked; this build has no
@@ -552,6 +551,109 @@ package
 			if (meta == null || meta.named_rooms == null)
 				return null;
 			return meta.named_rooms[name];
+		}
+
+		// ─────────────────────────────────────────────────────────────────
+		// PHASE 4 — the save belongs to a SET, and the persistence table is
+		// that set's size (plan §4.2).
+		// ─────────────────────────────────────────────────────────────────
+
+		/**
+		 * Decide what the save on disk means now that THIS set is real, and
+		 * make the persistence table match it.
+		 *
+		 * ⛔ WHY THE CONSTRUCTOR, beside `seedRuntimeTables` and for the same
+		 * reason: a set becomes real exactly once, here, whether it arrived
+		 * over ExternalInterface or was built from the embeds. Reconciling
+		 * here is exactly-once per set BY CONSTRUCTION, so a mount that
+		 * forgot to reconcile cannot exist. Two call sites could disagree;
+		 * one cannot.
+		 *
+		 * ⛔ WHAT A MISMATCH COSTS IF IT IS NOT CAUGHT: the save carries
+		 * `level`, `playerPositionX/Y`, ~28 inventory booleans and the
+		 * persistence table, and every one of them is SET-RELATIVE. Load a
+		 * save from set A under set B and the player resumes at an index that
+		 * means a different room, with a table whose rows describe entities
+		 * that are not there. Nothing errors; it quietly means something
+		 * else. So a mismatch takes the WHOLE save, not just the table.
+		 *
+		 * ⛓ THE COMPARISON IS `set_id`, AND THAT IS THE CONTENT HASH. The
+		 * sender stamps every set as `<base>-<FNV-1a of the canonical
+		 * document>` and refuses one whose id does not end in its own hash
+		 * (plan §9.1 rule 2), so an EDITED set reusing its name is already a
+		 * different `set_id` by construction. This build does not recompute
+		 * the hash — that would be two implementations of one identity, the
+		 * one place a divergence is invisible — it relies on the rule the
+		 * sender owns (§10.2's split), and cross-checks the SIZE below, which
+		 * it can see for itself.
+		 */
+		private function reconcileSave():void
+		{
+			// A set can be built before the save is open (a unit-style call,
+			// or a future caller). Nothing to reconcile against; the boot path
+			// opens SAVE_FILE before it ever asks for a set.
+			if (Main.SAVE_FILE == null)
+				return;
+
+			var want:int = rooms.length * Game.tagsPerLevel;
+			var table:Array = Main.SAVE_FILE.data.levelPersistence as Array;
+			var have:int = table == null ? -1 : table.length;
+			var savedId:String = Main.levelSetOnSave;
+
+			if (savedId == null || savedId == "")
+			{
+				// ⛓ AN UNSTAMPED SAVE IS ADOPTED, NOT DESTROYED — but only on
+				// the evidence of its own size. Every save written before this
+				// phase was written under the compiled-in 116 rooms, because
+				// no earlier build could size the table any other way, so a
+				// table that fits the set being mounted IS that set's table.
+				// One that does not fit says the save came from somewhere this
+				// build cannot identify, and the safe reading of an
+				// unidentifiable save is that it is not ours.
+				if (have == want)
+				{
+					Main.levelSetOnSave = setId;
+					return;
+				}
+				Main.freshSaveForLevelSet(setId, rooms.length,
+					"an unstamped save whose table holds " + levelsIn(have)
+					+ " level(s), but \"" + setId + "\" has " + rooms.length);
+				return;
+			}
+
+			if (savedId == setId)
+			{
+				if (have == want)
+					return;                      // the ordinary path: keep it all
+
+				// ⛔ THE STAMP MATCHES AND THE SIZE DOES NOT, so one of them is
+				// lying. `set_id` is content-derived, so a set with this id
+				// cannot have a different room count — which means this
+				// delivery is not what its id claims (a hand-rolled envelope
+				// that never went through the sender), or the table was
+				// truncated under us. ⛓ THE PLAN CALLED FOR EXTENDING THE
+				// TABLE WITH `true` HERE. That would paper over the only
+				// evidence of the disagreement, so it NAMES it instead and
+				// rebuilds — the whole point of §4.2 is that a set mismatch
+				// must never be quietly reinterpreted, and a stamp that
+				// matches wrongly is still a mismatch.
+				Main.freshSaveForLevelSet(setId, rooms.length,
+					"save stamp \"" + savedId + "\" matches, but its table holds "
+					+ levelsIn(have) + " level(s) and this set has " + rooms.length
+					+ " — the id is content-derived, so it cannot describe both");
+				return;
+			}
+
+			Main.freshSaveForLevelSet(setId, rooms.length,
+				"the save was written under \"" + savedId + "\" and this is \""
+				+ setId + "\" — level, position, inventory and every persistence "
+				+ "row are set-relative, so none of them carries over");
+		}
+
+		/** Whole levels a table of `n` booleans addresses; -1 for no table. */
+		private static function levelsIn(n:int):int
+		{
+			return n < 0 ? -1 : int(n / Game.tagsPerLevel);
 		}
 	}
 }
