@@ -1921,7 +1921,26 @@ package
 		{
 			var file:ByteArray = new _level;
 			var str:String = file.readUTFBytes( file.length );
-			var xml:XML = new XML(str);
+			loadLevelXML(new XML(str));
+		}
+		
+		/**
+		 * The room loader, over XML that is ALREADY PARSED — the level-set
+		 * seam (external-level-sets plan §4.4 seam 1).
+		 *
+		 * `loadlevel` above keeps its signature and its behaviour; it is now
+		 * the [Embed]-Class resolver, three lines over this. A page-supplied
+		 * room arrives as XML text and reaches the SAME body here, so there
+		 * is one room loader and two resolvers rather than two loaders.
+		 *
+		 * ⛔ THE BODY BELOW MOVED WHOLESALE AND UNEDITED. The model in
+		 * Archipelago-CC cites this file by line (1,847 `File.as:NNN`
+		 * citations across 122 files), so this commit carries the split and
+		 * NOTHING else: ONE offset — a `Game.as:NNN` citation at 1925 or
+		 * beyond is now NNN + 19.
+		 */
+		public function loadLevelXML(xml:XML):void 
+		{
 			
 			var e:Entity;
 			var o:XML;
