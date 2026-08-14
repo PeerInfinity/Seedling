@@ -60,7 +60,7 @@ package
 		 * something this build can reproduce, and a hash computed two ways is
 		 * two implementations of one truth.
 		 */
-		public static const SET_ID:String = "seedling-vanilla-367e679f";
+		public static const SET_ID:String = "seedling-vanilla-02408e1d";
 
 		/**
 		 * ⛓ MOVED FROM `Game.as:199`, unedited — 116 entries, one per room.
@@ -128,8 +128,8 @@ package
 		 * wall somewhere plausible-looking.
 		 */
 		public static const NAMED_ROOMS:Object = {
-			// Scenery/Moonrock.as:135 setPersistence(0, false, 2)
-			moonrock_target: { level: 2 },
+			// Moonrock.as:134 new Teleporter(…, 2, 48, 32) AND :135 setPersistence(0, false, 2)
+			moonrock_target: { level: 2, x: 48, y: 32 },
 			// Scenery/FinalDoor.as:50 checkPersistence(0, 114)
 			watcher_text: { level: 114 },
 			// Player.as:491 new Game(114, 72, 128, false, 2)

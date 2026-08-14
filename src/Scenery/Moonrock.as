@@ -131,7 +131,7 @@ package Scenery
 				var stairs:Entity = collide("Teleporter", x, y);
 				if (stairs is Stairs)
 				{
-					FP.world.add(new Teleporter(stairs.x, stairs.y, LevelSet.active().namedLevel("moonrock_target"), 48, 32)); // ⚠ (48,32) STAYS A LITERAL: `moonrock_target` is a roomRef, which cannot carry an arrival position. See the plan's phase 3b as-built.
+					FP.world.add(new Teleporter(stairs.x, stairs.y, LevelSet.active().namedLevel("moonrock_target"), LevelSet.active().namedX("moonrock_target"), LevelSet.active().namedY("moonrock_target"))); // ⚠ The stairs REPLACED here carried the same three values as @to/@playerx/@playery; the sender refuses a set where they disagree with the manifest.
 					Game.setPersistence(0, false, LevelSet.active().namedLevel("moonrock_target"));
 					FP.world.remove(stairs);
 				}
