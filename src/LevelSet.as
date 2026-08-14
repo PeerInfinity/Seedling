@@ -600,6 +600,19 @@ package
 			var have:int = table == null ? -1 : table.length;
 			var savedId:String = Main.levelSetOnSave;
 
+			if (savedId == "" && table == null)
+			{
+				// ⛓ NO SAVE AT ALL IS NOT A RESET, and saying so matters. This
+				// is every first boot; reporting it as a discarded save would
+				// put a reason string in the readout on every single launch,
+				// and a field that cries wolf on the healthy path is a field
+				// the next reader learns to skip. `levelSetReset` means
+				// something WAS thrown away.
+				Main.buildLevelPersistence(rooms.length);
+				Main.levelSetOnSave = setId;
+				return;
+			}
+
 			if (savedId == null || savedId == "")
 			{
 				// ⛓ AN UNSTAMPED SAVE IS ADOPTED, NOT DESTROYED — but only on
