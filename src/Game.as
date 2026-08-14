@@ -771,7 +771,7 @@ package
 			
 			if (menu)
 			{
-				loadlevel(levels[menuLevels[menuIndex]]);
+				loadLevelIndex(menuLevels[menuIndex]);
 				cameraTarget = new Point((FP.width - FP.screen.width) * (menuIndex % 2), (FP.height - FP.screen.height) * (menuIndex % 2));
 				FP.camera = cameraTarget.clone();
 				//trace(menuLevels[menuIndex] + ": " + FP.camera.x + ", " + FP.camera.y);
@@ -795,7 +795,7 @@ package
 					}
 					level = 0;
 				}
-				loadlevel(levels[level]);
+				loadLevelIndex(level);
 			}
 			
 			inventory.check();
@@ -2305,7 +2305,99 @@ package
 			}
 			setFallFromCeiling = false;
 		}
-		
+
+		/**
+		 * ── THE LEVEL-SET SEAM (plan §4.4 seam 2) ────────────────────────
+		 *
+		 * Everything below is APPENDED AT THE END OF THE CLASS on purpose.
+		 * §4.5's rule is that this file must not be re-flowed — the model in
+		 * Archipelago-CC cites it by line, 1,847 citations across 122 files —
+		 * and a field added at the end of a declaration block up at :525
+		 * would silently shift every citation below it just as surely as a
+		 * re-flow would. Appended here, this commit shifts NOTHING: the two
+		 * call sites it changes (:774, :798) are one-line substitutions of
+		 * the same length.
+		 */
+
+		/**
+		 * The level table's length — from the MOUNTED SET when one is
+		 * mounted, and only otherwise from the compiled-in `levels` array.
+		 * A set REPLACES the originals (⚖ user, plan §1), so there is never
+		 * a union of the two and never a shared id range.
+		 *
+		 * ⚠ `Main.as:319`'s persistence table is still sized from
+		 * `Game.levels.length` — that is plan phase 4, deliberately not this
+		 * commit. Until it lands, a mounted set LARGER than the built-in
+		 * table would read its extra rows out of range, which §8.3 measured
+		 * as *every tag already cleared*, silently. `LevelSet.acceptChunk`
+		 * does not know about the save file; `Bot.botLoadLevels` refuses that
+		 * case at the boundary instead.
+		 */
+		public static function levelCount():int
+		{
+			return LevelSet.mounted == null
+				? levels.length
+				: LevelSet.mounted.rooms.length;
+		}
+
+		/**
+		 * The last level-set refusal, "" when there has been none. Read it
+		 * with `Bot.botLevelSet()`; it exists so the backstop below can be
+		 * OBSERVED rather than merely believed.
+		 */
+		public static var levelSetError:String = "";
+
+		/**
+		 * Load a room BY LEVEL ID — the one place the level table is
+		 * dereferenced, and the choke point both original call sites now go
+		 * through.
+		 *
+		 * ⛔ THE RANGE CHECK IS NOT DEFENSIVE PROGRAMMING, it is the whole
+		 * point. §8.3 drove this in the recompiled runtime: booted at level
+		 * 116 and at level 200 the game answered `ok`, stayed alive, reported
+		 * itself healthy, and read the nonexistent level's whole persistence
+		 * row as *thirty cleared flags*. Nothing in the engine refuses an
+		 * out-of-range level, so this does.
+		 *
+		 * ⚠ IT CLAMPS RATHER THAN THROWING, and the reason is that by the
+		 * time control reaches here the engine is mid-`begin()` with a world
+		 * half-built; there is no useful place for an exception to go, and
+		 * the runtime has no stack cookie to survive an abort. The arms that
+		 * can actually be refused are refused at the API boundary — every
+		 * `Bot` entry point bounds ids against `levelCount()` before a world
+		 * is constructed — so a validated set never reaches this branch. It
+		 * is a backstop, and it is loud: a named error, kept for readout.
+		 */
+		public function loadLevelIndex(index:int):void
+		{
+			var count:int = levelCount();
+			if (index < 0 || index >= count)
+			{
+				levelSetError = "level " + index + " is outside the mounted set"
+					+ " (0.." + (count - 1) + ")";
+				trace("LEVEL SET REFUSED: " + levelSetError);
+				index = 0;
+			}
+
+			if (LevelSet.mounted == null)
+			{
+				loadlevel(levels[index]);
+				return;
+			}
+
+			// A mounted set cannot contain an unservable room —
+			// `LevelSet.acceptChunk` refuses the whole delivery over one. If
+			// that ever stops being true this must be heard, not guessed at.
+			var xmlText:String = LevelSet.mounted.xmlFor(index);
+			if (xmlText == null)
+			{
+				levelSetError = "mounted room " + index + " has no XML";
+				trace("LEVEL SET REFUSED: " + levelSetError);
+				return;
+			}
+			loadLevelXML(new XML(xmlText));
+		}
+
 	}
 
 }
