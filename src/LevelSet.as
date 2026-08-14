@@ -1,5 +1,7 @@
 package
 {
+	import flash.geom.Point;
+
 	/**
 	 * LevelSet — the MOUNTED level table, and the arrival side of the
 	 * external-level-set transport.
@@ -60,7 +62,18 @@ package
 		 */
 		public static const MAX_ROOMS_PER_CHUNK:int = 16;
 
-		/** The mounted set, or null = the built-in `Game.levels` embeds. */
+		/**
+		 * The DELIVERED set, or null = the built-in vanilla manifest.
+		 *
+		 * ⛔ NULL NO LONGER MEANS "no set" — phase 3b. Read the effective
+		 * table through `active()`, which answers with `VanillaSet.build()`
+		 * when nothing has been delivered, so there is one code path and the
+		 * ordinary game walks it on every boot. This field stays the
+		 * *delivered* set on purpose: phase 4's save stamp has to be able to
+		 * tell "the player is on vanilla" from "the player is on a set that
+		 * happens to be identical", and a readout that erased the difference
+		 * would make that undecidable.
+		 */
 		public static var mounted:LevelSet = null;
 
 		public var setId:String;
@@ -83,6 +96,35 @@ package
 			setId = id;
 			rooms = roomsInOrder;
 			meta = metadata;
+			seedRuntimeTables();
+		}
+
+		/**
+		 * Copy the manifest's per-room music into `Game.levelMusics`, the one
+		 * table the game MUTATES while it plays.
+		 *
+		 * ⛔ THE CONSTRUCTOR IS THE RIGHT PLACE AND THE ONLY ONE. A set
+		 * becomes real exactly once, here, whether it arrived over
+		 * ExternalInterface or was built from the embeds — so seeding here is
+		 * exactly-once per set by construction, and a mount that forgot to
+		 * seed cannot exist.
+		 *
+		 * ⛔ AND IT IS A COPY, NEVER AN ALIAS. Seven boss classes assign
+		 * `Game.levelMusics[level]` during play — `bossMusic` on wake, -1 on
+		 * death, 14 call sites (§8.2c). Aliasing the manifest's array would
+		 * let a boss fight rewrite the SET, so a re-mount would inherit the
+		 * previous playthrough's state and the manifest would stop describing
+		 * itself. This is state initialised from data; the data stays data.
+		 */
+		private function seedRuntimeTables():void
+		{
+			var musics:Array = new Array();
+			for (var i:int = 0; i < rooms.length; i++)
+			{
+				var room:Object = rooms[i];
+				musics.push(room == null || room.music == null ? -1 : int(room.music));
+			}
+			Game.levelMusics = musics;
 		}
 
 		/** The XML text for a level id, or null if this build cannot serve it. */
@@ -339,6 +381,177 @@ package
 			resetStaging();
 			mounted = new LevelSet(readySetId, assembled, readyMeta);
 			return "ok";
+		}
+
+		// ─────────────────────────────────────────────────────────────────
+		// PHASE 3b — the built-in manifest, and the six things `Game.as`
+		// used to hold as literals (plan §3.5, §4.3).
+		//
+		// Everything below reads the ACTIVE set's metadata. There is no
+		// vanilla branch in `Game`: the ordinary game is a set like any
+		// other, which is what makes every boot a test of this class.
+		// ─────────────────────────────────────────────────────────────────
+
+		/** The built-in vanilla set, constructed on first use, then kept. */
+		private static var builtInSet:LevelSet = null;
+
+		/**
+		 * The EFFECTIVE level table: the delivered set when there is one, the
+		 * built-in vanilla manifest otherwise.
+		 *
+		 * ⚠ CALLED PER FRAME from `Game.update` (the snow gradient and both
+		 * music overrides), so it is a null check and a return. The vanilla
+		 * set is built once — 116 object literals holding `Class` references,
+		 * no XML conversion (see `VanillaSet.build`).
+		 */
+		public static function active():LevelSet
+		{
+			if (mounted != null)
+				return mounted;
+			if (builtInSet == null)
+				builtInSet = VanillaSet.build();
+			return builtInSet;
+		}
+
+		/**
+		 * The compiled-in `[Embed]` Class for a room, or null when this room
+		 * carries XML text instead — the second arm of §4.3 shape (c).
+		 *
+		 * ⛓ THE CONVERSION IS NOT HERE, deliberately. `Game.loadlevel(Class)`
+		 * is already the three-line embed resolver (`new`, `readUTFBytes`,
+		 * `loadLevelXML`) and phase 3 left it exactly as the original wrote
+		 * it. This says WHICH class; that says what to do with it, unchanged,
+		 * on the path the ordinary game has always taken.
+		 */
+		public function embedFor(index:int):Class
+		{
+			if (index < 0 || index >= rooms.length)
+				return null;
+			var room:Object = rooms[index];
+			if (room == null || room.source == null)
+				return null;
+			return room.source.embed as Class;
+		}
+
+		/** Where a new game begins — `Game.as:796`'s literal 0, as data. */
+		public function get startLevel():int
+		{
+			return meta == null || meta.start == null ? 0 : int(meta.start.level);
+		}
+
+		/**
+		 * Put a fresh game at the set's start. Level always; position only
+		 * when the manifest supplies one.
+		 *
+		 * ⛔ THE OMITTED CASE IS NOT "0, 0" — the schema says an absent x/y
+		 * means the `Game` constructor's own defaults (80, 128), which is
+		 * where `playerPosition` already is by the time this runs. So an
+		 * absent position must leave it ALONE rather than write a default
+		 * back, or vanilla (which omits both) would move.
+		 */
+		public function applyStart(game:Game):void
+		{
+			game.level = startLevel;
+			var spawn:Object = meta == null ? null : meta.start;
+			if (spawn == null || spawn.x == null || spawn.y == null)
+				return;
+			game.playerPosition = new Point(int(spawn.x), int(spawn.y));
+		}
+
+		/** Title-screen rooms, in order — `Game.as:449`'s `menuLevels`. */
+		public function menuRoom(index:int):int
+		{
+			var list:Array = menuRooms;
+			if (list == null || list.length == 0)
+				return 0;
+			return int(list[((index % list.length) + list.length) % list.length]);
+		}
+
+		/**
+		 * How many rooms the title screen cycles. ⛔ NEVER 0: `Game.as:1294`
+		 * computes `menuIndex % menuRoomCount()`, and a zero-length list makes
+		 * that NaN and the next `menuRoom` lookup undefined. The validator
+		 * requires `menu_rooms` to be non-empty; this refuses to return the
+		 * value that would break the modulo even if one slipped through.
+		 */
+		public function menuRoomCount():int
+		{
+			var list:Array = menuRooms;
+			return list == null || list.length == 0 ? 1 : list.length;
+		}
+
+		private function get menuRooms():Array
+		{
+			return meta == null ? null : meta.menu_rooms as Array;
+		}
+
+		/** `Game.as:908`'s `level == 45` — the snow gradient, as a room flag. */
+		public function hasSnowGradient(index:int):Boolean
+		{
+			return roomFlag(index, "snow_gradient");
+		}
+
+		/**
+		 * `Game.as:1175`/`:1181`'s `level != 10` — this room is exempt from
+		 * BOTH sword/shield music overrides. Note the polarity flip: the
+		 * literal was an exemption written as an inequality, and the flag says
+		 * what it means.
+		 */
+		public function isMusicExempt(index:int):Boolean
+		{
+			return roomFlag(index, "music_override_exempt");
+		}
+
+		private function roomFlag(index:int, flag:String):Boolean
+		{
+			if (index < 0 || index >= rooms.length)
+				return false;
+			var room:Object = rooms[index];
+			return room != null && room[flag] == true;
+		}
+
+		/**
+		 * The six CODE-BUILT room references (`named_rooms`, plan §8.2a) — the
+		 * ones no bundle rewrite can reach, because they are constructed in
+		 * ActionScript rather than read out of an .oel.
+		 *
+		 * ⛔ A MISSING NAME RETURNS THE SET'S START ROOM, LOUDLY. The sender's
+		 * validator requires all six and refuses a set missing one, so this
+		 * branch is unreachable through a delivered set; if it is ever
+		 * reached, a silent 0 would put the player in a real room that is not
+		 * the right one — the failure this arc keeps catching. It is named in
+		 * `Game.levelSetError` instead.
+		 */
+		public function namedLevel(name:String):int
+		{
+			var ref:Object = namedRoom(name);
+			if (ref == null)
+			{
+				Game.levelSetError = "named_rooms is missing \"" + name + "\"";
+				return startLevel;
+			}
+			return int(ref.level);
+		}
+
+		/** Arrival x for a named warp; the `Game` constructor's 80 if absent. */
+		public function namedX(name:String):int
+		{
+			var ref:Object = namedRoom(name);
+			return ref == null || ref.x == null ? 80 : int(ref.x);
+		}
+
+		/** Arrival y for a named warp; the `Game` constructor's 128 if absent. */
+		public function namedY(name:String):int
+		{
+			var ref:Object = namedRoom(name);
+			return ref == null || ref.y == null ? 128 : int(ref.y);
+		}
+
+		private function namedRoom(name:String):Object
+		{
+			if (meta == null || meta.named_rooms == null)
+				return null;
+			return meta.named_rooms[name];
 		}
 	}
 }
