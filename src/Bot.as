@@ -1594,27 +1594,38 @@ package
 			// is the same "already too late to despawn" fact the R0 grants
 			// ruling turned on.
 			//
-			// ⚠ The RESET is gated on there being clears at all, so a v1 or
-			// v2 tape takes a byte-identical path to the one it took before
-			// this batch. It exists so that a v3 tape's state is a pure
-			// function of the tape rather than of whatever ran on the page
-			// before it: the harness uses a fresh page per tape, but "the
-			// feature is correct because the caller is careful" is how order
-			// dependence gets in.
-			if (persistLevel.length > 0)
+			// ⛓⛓⛓ ⚖ RULING 25 (user, 2026-08-22): *"I thought it was
+			// supposed to initialize the persistence data to how it would be
+			// in a fresh start unless something deliberately overrides that.
+			// But apparently that's not what was happening. I want to fix
+			// that."* — SO THE SWEEP IS UNCONDITIONAL.
+			//
+			// It used to be gated on `persistLevel.length > 0`, which made a
+			// tape that DECLARED NOTHING inherit whatever table the page held
+			// — the opposite of the guarantee the reset exists to give. The
+			// guard was written to keep a v1/v2 tape on a byte-identical
+			// path, and that is exactly the order dependence the next
+			// sentence of the old comment warned about: "the feature is
+			// correct because the caller is careful" is how order dependence
+			// gets in, and a fresh page per tape is the caller being careful.
+			//
+			// ⛓ The all-true table IS the fresh start: `Main.buildLevelPersistence`
+			// builds `levelCount * tagsPerLevel` booleans, "all true = nothing
+			// cleared", and this loop reproduces it exactly. So a tape that
+			// declares nothing now gets what `Main.startSave` would have given
+			// it, and a tape that declares something still gets precisely what
+			// it declared, applied on top.
+			var levelCount:int = Game.levelCount();
+			for (var li:int = 0; li < levelCount; li++)
 			{
-				var levelCount:int = Game.levelCount();
-				for (var li:int = 0; li < levelCount; li++)
+				for (var ti:int = 0; ti < Game.tagsPerLevel; ti++)
 				{
-					for (var ti:int = 0; ti < Game.tagsPerLevel; ti++)
-					{
-						Main.levelPersistenceSet(li, ti, true);
-					}
+					Main.levelPersistenceSet(li, ti, true);
 				}
-				for (var pi:int = 0; pi < persistLevel.length; pi++)
-				{
-					Game.setPersistence(persistTag[pi], false, persistLevel[pi]);
-				}
+			}
+			for (var pi:int = 0; pi < persistLevel.length; pi++)
+			{
+				Game.setPersistence(persistTag[pi], false, persistLevel[pi]);
 			}
 			// ── R5 slice 23: the SAVE ARRAYS, also BEFORE the world ───────
 			//
@@ -1627,41 +1638,39 @@ package
 			// `Player.hasAllTotemParts()` and it would run on the wrong
 			// side of the arrival.
 			//
-			// ⚠ THE RESET IS GATED ON THE TAPE DECLARING SOMETHING, so a
-			// v1..v5 tape takes a byte-identical path to the one it took
-			// before this batch — the R0 byte-inertness gate is what says
-			// so, and the gate is the reason the arm is written this way
-			// rather than resetting unconditionally.
+			// ⛓⛓⛓ ⚖ RULING 25 again, and for the same reason: THIS RESET IS
+			// UNCONDITIONAL TOO. It used to be gated on the tape declaring at
+			// least one totem part, key or seal part, so a tape presenting an
+			// EMPTY save block inherited the parts an earlier tape on the same
+			// page had presented. "Fresh start unless something deliberately
+			// overrides it" is the whole boot state, not the persistence table
+			// alone.
 			//
 			// ⚠ AND THE RESET IS TO THE FRESH-SAVE VALUES, which
 			// `Main.startSave` writes into an empty store: false, false and
 			// **-1** (not 0, and not false — `hasSealPart` is an INT array
 			// whose empty slot is -1, and `hasAllSealParts()` tests
 			// `!= -1`).
-			if (saveTotemParts.length > 0 || saveKeys.length > 0
-				|| saveSealParts.length > 0)
-			{
-				var si:int;
-				for (si = 0; si < Player.totemParts; si++)
-					Main.hasTotemPartSet(si, false);
-				for (si = 0; si < Player.totalKeys; si++)
-					Main.hasKeySet(si, false);
-				for (si = 0; si < SealController.SEALS; si++)
-					Main.hasSealPartSet(si, -1);
-				for (si = 0; si < saveTotemParts.length; si++)
-					Main.hasTotemPartSet(int(saveTotemParts[si]), true);
-				for (si = 0; si < saveKeys.length; si++)
-					Main.hasKeySet(int(saveKeys[si]), true);
-				// ⛔ THE SEAL WRITE IS POSITIONAL: slot `si` gets the seal
-				// IDENTITY the tape declared in position `si`, because
-				// `SealController.getSealPart` fills the first -1 slot with
-				// the identity it drew. Indexing by identity would set
-				// `hasSealPart[identity] = identity` — a different array,
-				// which `hasAllSealParts()` would then read as complete
-				// only if identity 15 happened to be collected.
-				for (si = 0; si < saveSealParts.length; si++)
-					Main.hasSealPartSet(si, int(saveSealParts[si]));
-			}
+			var si:int;
+			for (si = 0; si < Player.totemParts; si++)
+				Main.hasTotemPartSet(si, false);
+			for (si = 0; si < Player.totalKeys; si++)
+				Main.hasKeySet(si, false);
+			for (si = 0; si < SealController.SEALS; si++)
+				Main.hasSealPartSet(si, -1);
+			for (si = 0; si < saveTotemParts.length; si++)
+				Main.hasTotemPartSet(int(saveTotemParts[si]), true);
+			for (si = 0; si < saveKeys.length; si++)
+				Main.hasKeySet(int(saveKeys[si]), true);
+			// ⛔ THE SEAL WRITE IS POSITIONAL: slot `si` gets the seal
+			// IDENTITY the tape declared in position `si`, because
+			// `SealController.getSealPart` fills the first -1 slot with
+			// the identity it drew. Indexing by identity would set
+			// `hasSealPart[identity] = identity` — a different array,
+			// which `hasAllSealParts()` would then read as complete
+			// only if identity 15 happened to be collected.
+			for (si = 0; si < saveSealParts.length; si++)
+				Main.hasSealPartSet(si, int(saveSealParts[si]));
 			// ── R7: THE SEAM BLOCK, WITH THE SAVE ARRAYS AND FOR THEIR ───
 			//     REASON — before the world exists.
 			//
