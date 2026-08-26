@@ -269,6 +269,17 @@ package
 		/** Sticky: did we ever skip a frame as a dead/frozen frame? */
 		private static var deadFrames:int = 0;
 
+		// ── R9 slice 12g' (kickoff §46, ⚖ 58's (F)): THE ARM WAITS FOR
+		//    THE WORLD SWAP TO LAND ────────────────────────────────────────
+		//
+		// The world `botStart` asked for, while `FP._goto` still holds it.
+		// `null` means "nothing pending" — the skip path and every frame
+		// after the arm. This is the ONLY field that can answer "has the swap
+		// landed"; see `Bot.update`'s gate for why the two obvious ones cannot.
+		private static var pendingWorld:Game = null;
+		/** `Game.time` on the frame the tape armed; -1 while pending. */
+		private static var armedAtTime:Number = -1;
+
 		// The boot block, honored from R0 on (see `botStart`).
 		private static var bootX:int = 80;
 		private static var bootY:int = 128;
@@ -1514,6 +1525,12 @@ package
 
 				loaded = true;
 				armed = false;
+				// R9 slice 12g': a new tape cancels any arm still waiting on
+				// a swap. Without this a `botLoadTape` between a `botStart`
+				// and its arm would leave the NEXT window armed by the
+				// PREVIOUS window's world.
+				pendingWorld = null;
+				armedAtTime = -1;
 				finished = false;
 				errorText = "";
 				tick = 0;
@@ -1728,9 +1745,19 @@ package
 				// them and why declaring them is a WRITE and not an assert.
 				Music.botSetCurrent(seamMusicSet, seamMusicIndex);
 			}
+			// ── R9 slice 12g' (§46): CAPTURE THE WORLD, DO NOT ARM BESIDE IT ─
+			//
+			// `FP.world = x` writes `FP._goto` ONLY (`FP.as:87-90`); the swap
+			// happens in `Engine.checkWorld()` at the END of the next
+			// `Engine.update()` (`Engine.as:77`, `:242-252`). Holding the
+			// instance here is what lets `Bot.update` below ask the one
+			// question that can be answered honestly: "is the world I asked
+			// for the world I am now looking at?"
+			var booting:Game = null;
 			if (bootLevel != Main.level || !atBootPosition())
 			{
-				FP.world = new Game(bootLevel, bootX, bootY);
+				booting = new Game(bootLevel, bootX, bootY);
+				FP.world = booting;
 			}
 			// ── R6 slice 6a: the RNG reset, AFTER the `new Game` line ─────
 			//
@@ -1789,7 +1816,18 @@ package
 			// `FP.randomSeedLive`, added in this batch. Gated on a declared
 			// non-zero, so no v1..v7 tape reaches it.
 			if (rngFpSeed != 0) FP.randomSeed = uint(rngFpSeed);
-			armed = true;
+			// ── R9 slice 12g' (§46, ⚖ 58's (F)): THE ARM IS DEFERRED WHEN A
+			//    SWAP IS PENDING, AND IMMEDIATE WHEN ONE IS NOT ────────────
+			//
+			// The skip path (`booting == null`) arms exactly as it always
+			// has: no swap was requested, so `FP.world` is already the world
+			// the boot block names and t=0 is the boot trivially (§45.2).
+			// The swapping path arms in `Bot.update`, on the first frame that
+			// is actually looking at the new world. See that gate for the
+			// mechanism and for what the waiting frame is NOT.
+			pendingWorld = booting;
+			armed = (booting == null);
+			armedAtTime = armed ? Game.time : -1;
 			finished = false;
 			errorText = "";
 			tick = 0;
@@ -1906,6 +1944,20 @@ package
 			var o:Object = {
 				loaded: loaded,
 				armed: armed,
+				// ── R9 slice 12g' (§46): THE ARM FRAME, FROM THE GAME ─────
+				//
+				// `pending` is true while `botStart` has asked for a world
+				// swap that has not landed; `armed_at` is `Game.time` on the
+				// frame the tape actually armed, -1 while pending. Both are
+				// here so a caller can see WHEN the arm happened without a
+				// second bridge call — 12g had to read `botStatus` BEFORE
+				// `botStart` to get a lower bound on the arm frame, and
+				// §43.5's lesson is that such a read perturbs the very thing
+				// it measures. This one is taken after the fact and costs
+				// nothing. `Game.time` is `Main.time`, incremented once per
+				// `Game.update()` (`Game.as:846`), so the difference between
+				// `armed_at` and a pre-`botStart` reading is a FRAME COUNT.
+				arm: { pending: pendingWorld != null, armed_at: armedAtTime },
 				finished: finished,
 				error: errorText,
 				tick: tick,
@@ -2754,6 +2806,8 @@ package
 		{
 			loaded = false;
 			armed = false;
+			pendingWorld = null;
+			armedAtTime = -1;
 			finished = false;
 			errorText = "";
 			tick = 0;
@@ -2867,6 +2921,105 @@ package
 			// the room is fading. Gating this on `armed` would make the swim
 			// clock jump at exactly the boundaries the director cuts on.
 			if (pinSoundClock) Music.pinStep();
+
+			// ── ⛓⛓⛓ R9 SLICE 12g' (§46, ⚖ 58's (F)): THE ARM WAITS FOR THE
+			//    WORLD SWAP TO LAND — AND IT IS AN IDENTITY TEST BECAUSE
+			//    EVERY OTHER CANDIDATE IS WRITTEN TOO EARLY ────────────────
+			//
+			// THE DEFECT THIS REMOVES (12g, §45.3). `botStart` used to set
+			// `armed = true; tick = 0` on the same pass that requested the
+			// world swap. `FP.world = x` writes `FP._goto` and nothing else
+			// (`FP.as:87-90`), so the NEXT `Bot.update` — this function —
+			// ran against the OUTGOING world. If that world was still fading
+			// the frame was counted dead and the tape lost nothing; if its
+			// fade had ended, this function RECORDED t=0 off the outgoing
+			// world's player and dispatched the tape's first inputs into a
+			// world about to be discarded. 12g measured the cut to one frame
+			// (19 wins at outgoing frame <= 18, 8 losses at >= 19, 27 drives,
+			// no overlap) and proved it was NOT a duration: 0.48 s of
+			// pre-boot idle produced both outcomes.
+			//
+			// ⛔⛔ THE TWO OBVIOUS CONDITIONS ARE BOTH VACUOUS, AND THE
+			// SECOND ONE IS WHY THIS COMMENT IS LONG. `Game`'s constructor
+			// runs, one line apart:
+			//
+			//     Game.as:630   level = _level;
+			//     Game.as:631   playerPosition = new Point(_playerx, _playery);
+			//
+			// and BOTH of those are setters onto STATICS —
+			// `Main.level = i` (`Game.as:526-528`) and
+			// `Main.playerPositionX/Y = p.x/p.y` (`Game.as:555-561`). They
+			// are therefore true the instant `new Game(...)` is EVALUATED,
+			// inside `botStart`, with the swap still only `FP._goto`. So
+			// `Main.level == bootLevel` cannot discriminate a lost race
+			// (12g's finding, and every one of that slice's eight refusals
+			// reads the tape's LEVEL beside the page's POSITION), and
+			// `atBootPosition()` cannot either — its own docblock says so in
+			// words, calling `Main.playerPositionX/Y` "SPAWN coordinates,
+			// written at every `Game` construction". That property is
+			// CORRECT for its own caller, the skip test above, which runs
+			// BEFORE any construction. As a post-swap gate it is a check
+			// that cannot fail.
+			//
+			// ⛓ SO THE GATE IS OBJECT IDENTITY, and it is not a proxy for
+			// the thing that matters — it IS the thing that matters. Six
+			// lines below, `FP.world as Game` is what the dead-frame gate
+			// reads, and `findPlayer()` is `FP.world.classFirst(Player)`:
+			// the observation's level and position both come off whatever
+			// `FP.world` returns. Asking "is `FP.world` the instance I
+			// constructed" asks about the exact object the observation will
+			// be taken from, and there is no second write that can make it
+			// true early.
+			//
+			// ⛓ IT IS EXACTLY ONE FRAME, ALWAYS — NOT A WIDER MARGIN.
+			// `Main.update()` is `Bot.update(); super.update();`
+			// (`Main.as:61-66`) and `Engine.update()` ends with
+			// `if (FP._goto) checkWorld();` (`Engine.as:77`), which assigns
+			// `FP._world = FP._goto` and calls `begin()` (`Engine.as:242-252`).
+			// So precisely one `Bot.update` runs between the request and the
+			// landing, whatever the frame rate, the fade or the caller's
+			// setup time. The race is REMOVED rather than made less likely,
+			// which is what ⚖ 58 distinguished a fix from a gate by.
+			//
+			// ⚠ THE WAITING FRAME IS NOT A DEAD FRAME, DELIBERATELY. This
+			// sits ABOVE `if (!armed) return;`, so a pending frame takes the
+			// same path a frame before `botStart` takes: no `deadFrames++`,
+			// no `autoAdvance()`, no dispatch, no tick. The tape has not
+			// STARTED yet, and counting its wait as a dead frame would put a
+			// frame of the OUTGOING world into a number that describes this
+			// window's own ceremony. ⇒ `dead_frames` on a swapping tape
+			// becomes uniform: the new world's fade and nothing else. It
+			// used to be that plus one on the winning path (41 vs 40 in
+			// §45.3's table — the extra one being precisely this frame), and
+			// exactly that plus zero on the losing path, because there the
+			// frame recorded instead of dying. Nothing asserts the field:
+			// all committed expectations are `{ticks, transitions}` only.
+			//
+			// ⚠ AND IT CANNOT SWALLOW A CEREMONY. §45.2 measured all 18
+			// committed chain boundaries as `previous-segment-end ==
+			// next-boot + half-tile`, i.e. every director boundary takes the
+			// SKIP path and never reaches this gate. The pending frame
+			// happens once per page, on the page's own boot world's fade,
+			// where `Game.talking` is false (the ctor's `end()` clears it)
+			// and no `Help` exists — so the `autoAdvance()` this frame no
+			// longer calls had nothing to do.
+			//
+			// ⚠ THE RNG IS UNMOVED BY THIS CHANGE. `Rng.setState` is at
+			// `Bot.as:1781` in `botStart`, below the `new Game` line and
+			// untouched here; `botStart`'s position in the frame loop and
+			// the frame the swap lands on are both unchanged. The outgoing
+			// world keeps drawing until the swap, exactly as before. With
+			// ⚖ 57's `sound` pin ON those draws are deterministic; with it
+			// OFF they are §43's wall-clock mechanism. That is why the pin
+			// and this fix are ONE re-record (§45.5) and not two.
+			if (pendingWorld != null)
+			{
+				if (FP.world !== pendingWorld) return;
+				pendingWorld = null;
+				armed = true;
+				tick = 0;
+				armedAtTime = Game.time;
+			}
 			if (!armed) return;
 
 			var game:Game = FP.world as Game;
