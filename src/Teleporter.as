@@ -24,6 +24,15 @@ package
 		private var invert:Boolean; //If this is true, it inverts the rules for the tag
 		private var deactivated:Boolean = false; //If true, then doesn't render or do player stuff
 		private var sign:int; //Displays text in the room that this teleporter teleports to (text in Message.as)
+
+		/**
+		 * ⛓ The OEL element this entity was built from — one of
+		 * `seedlingAtlasDerivation.LINK_TAGS` (`teleporter`, `stairsup`,
+		 * `stairsdown`). `Stairs` overrides it, and `Stairs.update()` is
+		 * `super.update()`, so ONE patch here covers all three of this game's
+		 * transition primitives.
+		 */
+		protected var exitType:String = "teleporter";
 		
 		public var sound:String = "Room";
 		public var soundIndex:int = 0;
@@ -88,6 +97,15 @@ package
 			{
 				if (!playerTouching)
 				{
+					// ⛓ PRE-SWAP, and it has to be here. `FP.world = x` writes
+					// FP._goto only (FP.as:87-91), but `new Game(to,..)` sets
+					// Main.level in its own constructor (Game.as:629-631) — so
+					// by the time the host's `level` report moves, WHICH door
+					// fired is already unrecoverable. `Game.update()`'s
+					// !checked latch (`:826-834`) makes this fire exactly once
+					// per entry onto the portal; the `else` below re-arms it.
+					Game.pendingExit = (++Game.pendingExitSeq) + "|" + Main.level + "|"
+						+ exitType + "|" + int(x) + "|" + int(y) + "|" + to;
 					Music.playSound(sound, soundIndex);
 					FP.world = new Game(to, playerPos.x, playerPos.y);
 					Game.sign = sign;

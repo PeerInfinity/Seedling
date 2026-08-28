@@ -575,6 +575,50 @@ package
 		
 		//Controls it a "Message" is shown at the start of this level (-1 means one is not shown)
 		public static var sign:int = -1;
+
+		/**
+		 * ⛓⛓ THE PRE-SWAP DOOR REPORT (procgen M1, host-driven crossings).
+		 *
+		 * `"<seq>|<fromLevel>|<type>|<x>|<y>|<to>"`, written by
+		 * `Teleporter.update()` BEFORE `FP.world = new Game(...)`. The host
+		 * rebuilds the atlas exit id as `out_<type>_<x>_<y>`
+		 * (`seedlingAtlasDerivation.js:99`, `LINK_TAGS` at `:76`) and decides
+		 * whether that door crosses a substrate boundary. The GAME knows
+		 * nothing about worlds and needs no registry pushed into it.
+		 *
+		 * ⛔ WHY THE REPORT AND NOT `level`: `FP.world = x` writes `FP._goto`
+		 * only (`FP.as:87-91`), but `new Game(to,..)` sets `Main.level` in its
+		 * own constructor (`:629-631`), so the host's `level` report has
+		 * already moved and carries no door identity. This lands one report
+		 * earlier and says which door fired.
+		 *
+		 * ⛔ THE SEQ PREFIX IS LOAD-BEARING. BridgeGeneric reports a property
+		 * only when its value CHANGED (`BridgeGeneric.as:201`) — MEASURED on
+		 * p4c at W5-0: re-writing the same string produced NO report. Two
+		 * fires of ONE door would otherwise be reported once.
+		 */
+		public static var pendingExit:String = "";
+		/** @private bump-only; part of `pendingExit`'s payload. */
+		public static var pendingExitSeq:int = 0;
+
+		/**
+		 * ⛓⛓ THE CHECK REPORT — `"<seq>|<level>|<tag>|<0|1>"`, written by
+		 * `setPersistence` below, which is the collection choke point 14 of
+		 * the 21 pickup classes, `Chest` and M1's own `APItem` all call.
+		 * `(level, tag)` is the address the host's placement table is keyed on
+		 * (`apPlacementRewriter.placementKey`).
+		 *
+		 * ⛔ THE FOURTH FIELD IS THE VALUE WRITTEN, AND IT IS NOT DECORATION.
+		 * `setPersistence` has ~50 callers in this game — every door taken
+		 * (`Teleporter.as:72`), every boss killed, every lock opened — and six
+		 * of them RESTORE a slot with `true` (`Lock.returnToNormal`,
+		 * `RockLock:73`, `BossLock:89`, `LightPole:97`, `ButtonRoom:93,96`).
+		 * A clear is `false`; the host requires it, so a restore of a slot
+		 * that happens to be an AP location's tag cannot send a check.
+		 */
+		public static var pendingCheck:String = "";
+		/** @private bump-only; part of `pendingCheck`'s payload. */
+		public static var pendingCheckSeq:int = 0;
 		public static var fallthroughSign:int = -1;
 		
 		//Main Menu motion stuff
@@ -1846,6 +1890,43 @@ package
 		public static function setPersistence(tag:int, o:Boolean, _l:int=-1):void
 		{
 			Main.levelPersistenceSet(_l >= 0 ? _l : Main.level, tag, o);
+			// ⛓ M1's check report. The level is the one THIS CALL names, not
+			// Main.level: ButtonRoom writes another room's slot (`:93`), and a
+			// report that said Main.level would address the wrong room.
+			pendingCheck = (++pendingCheckSeq) + "|" + (_l >= 0 ? _l : Main.level)
+				+ "|" + tag + "|" + int(o);
+		}
+
+		/**
+		 * ⛓ The five boss keys as a bitmask, and the totem parts as a count —
+		 * M1's two new declarable properties.
+		 *
+		 * `BossKey.removed()` writes `Player.hasKeySet(...)` and
+		 * `BossTotemPart` its own count; NEITHER touches persistence, so those
+		 * ten of the playthrough's 41 locations are invisible to the check
+		 * report above. They cannot be declared as they stand either —
+		 * `Main.hasKey(i)` is a FUNCTION (`Main.as:162`) and BridgeGeneric
+		 * reads `cls.ref[prop.property]`. Two getters close both gaps and cost
+		 * the host nothing.
+		 */
+		public static function get keyMask():int
+		{
+			var m:int = 0;
+			for (var i:int = 0; i < Player.totalKeys; i++)
+			{
+				if (Main.hasKey(i)) m |= (1 << i);
+			}
+			return m;
+		}
+		/** How many of `Player.totemParts` the save holds. */
+		public static function get totemCount():int
+		{
+			var n:int = 0;
+			for (var i:int = 0; i < Player.totemParts; i++)
+			{
+				if (Main.hasTotemPart(i)) n++;
+			}
+			return n;
 		}
 		
 		public static function worldFrame(n:int, loops:Number=1):int //n is the number of values to return (1..n) and loops is the number of animation loops to go over.
@@ -2208,6 +2289,10 @@ package
 				for each (o in xml.objects[0].rock3) { add(new Rock(o.@x, o.@y, 2)); }
 				for each (o in xml.objects[0].rock4) { add(new Rock(o.@x, o.@y, 3)); }
 				for each (o in xml.objects[0].pole) { add(new Pole(o.@x, o.@y)); }
+				// ⛓ M1: Archipelago's own placement. Two attributes and no more
+				// — `@tag` is the persistence slot AND the location's address,
+				// `@look` names the sprite. See `Pickups/APItem.as`.
+				for each (o in xml.objects[0].apitem) { add(new APItem(o.@x, o.@y, o.@tag, o.@look)); }
 				for each (o in xml.objects[0].sword) { add(new Sword(o.@x, o.@y, o.@tag)); }
 				for each (o in xml.objects[0].feather) { add(new Feather(o.@x, o.@y, o.@tag)); }
 				for each (o in xml.objects[0].ghostspear) { add(new GhostSpear(o.@x, o.@y, o.@tag)); }

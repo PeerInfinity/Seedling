@@ -19,6 +19,10 @@ package
 		{
 			super(_x, _y, _to, _px, _py, true, -1, false, _sign);
 			up = _up;
+			// ⛓ M1: so the host's rebuilt exit id (`out_<type>_<x>_<y>`) says
+			// which of the three LINK_TAGS this door is. The report itself is
+			// inherited — Stairs.update() is super.update().
+			exitType = _up ? "stairsup" : "stairsdown";
 			graphic = sprStairs;
 			sprStairs.frame = int(!up);
 			if (up)
