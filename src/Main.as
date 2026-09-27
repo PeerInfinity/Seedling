@@ -65,8 +65,14 @@ package
 			// at the end of the previous frame, so an event dispatched here
 			// is live for exactly this frame and self-clears.
 			Bot.update();
-			super.update();
-			Music.update();
+			// ⛓ P4E (⚖ 72 (a′)): a tape that declared `hold` and has LATCHED
+			// holds the room — no body steps, `Game.time` does not advance,
+			// the mixer does not move — until the next `botStart`.
+			if (!Bot.holding)
+			{
+				super.update();
+				Music.update();
+			}
 			
 			if (READY_TO_SUBMIT_BADGES && QuickKong.LOADED && !SUBMITTED_BADGES)
 			{

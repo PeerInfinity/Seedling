@@ -280,6 +280,23 @@ package
 		/** `Game.time` on the frame the tape armed; -1 while pending. */
 		private static var armedAtTime:Number = -1;
 
+		// ── R9 slice P4E (⚖ 72 (a′)): HOLD-AFTER-LATCH ─────────────────
+		//
+		// `holdDeclared` is the LOADED tape's `hold` (tape_version 12, the
+		// game-visible projection of a campaign continuation); `holding` is
+		// the world held. The latch sets `holding` iff the tape declared it,
+		// and `Main.update` skips the world step (and the mixer) while it is
+		// true — INCLUDING the finish frame's own `super.update()`, which is
+		// why the flag is set at the latch and read in `Main`, not here.
+		// Released by `botStart` (the next window), `botReset` and
+		// `botLoadLevels`. ⛔ `botLoadTape` does NOT release it: the director
+		// loads the next window WHILE the room is held, and a release there
+		// would re-open the gap between the load and the start.
+		// ⛔ Byte-inert by construction for every tape that does not declare
+		// it: `holding` is only ever set true behind `holdDeclared`.
+		private static var holdDeclared:Boolean = false;
+		public static var holding:Boolean = false;
+
 		// The boot block, honored from R0 on (see `botStart`).
 		private static var bootX:int = 80;
 		private static var bootY:int = 128;
@@ -859,8 +876,12 @@ package
 				var t:Object = JSON.parse(json);
 
 				var version:int = int(t.tape_version);
-				if (version < 1 || version > 8)
-					return "error:tape_version must be 1, 2, 3, 4, 5, 6, 7 or 8, got "
+				// ⛓ P4E: 12 is the game-visible version that adds `hold`.
+				// 9, 10 and 11 are MODEL-ONLY (tapeFormat.js
+				// `gameVisibleTape` drops everything they added), so no
+				// projection ever carries them and they stay refused.
+				if (version < 1 || (version > 8 && version != 12))
+					return "error:tape_version must be 1, 2, 3, 4, 5, 6, 7, 8 or 12, got "
 						+ t.tape_version;
 				if (t.game != "seedling")
 					return "error:game must be seedling, got " + t.game;
@@ -1474,6 +1495,26 @@ package
 					return "error:boot.level " + bootAt + " is not a level"
 						+ " (0.." + (Game.levelCount() - 1) + ")";
 
+				// ── the version 12 field: HOLD-AFTER-LATCH ────────────────
+				// VALUE-SCOPED, the eighth time: a parsed tape below 12 may
+				// arrive with `hold: false` (or without the key), which is
+				// the "declares nothing" value. Validated
+				// HERE, before the first static is assigned, for the reason
+				// the comment above gives.
+				var newHold:Boolean = false;
+				if (version < 12)
+				{
+					if (t.hold != null && t.hold != false)
+						return "error:tape_version " + version + " means hold: false "
+							+ "BY DEFINITION. Bump tape_version to 12.";
+				}
+				else
+				{
+					if (!(t.hold is Boolean))
+						return "error:hold must be a boolean on a tape_version 12 tape";
+					newHold = Boolean(t.hold);
+				}
+
 				spanCode = codes;
 				spanFrom = froms;
 				spanTo = tos;
@@ -1522,6 +1563,8 @@ package
 				seamMusicSet = newSeamMusicSet;
 				seamMusicIndex = newSeamMusicIndex;
 				tapeVersion = version;
+
+				holdDeclared = newHold;
 
 				loaded = true;
 				armed = false;
@@ -1576,6 +1619,8 @@ package
 		{
 			if (!loaded) return "error:no tape loaded";
 			if (armed) return "error:already running";
+			// P4E: the next window starts from exactly the held room.
+			holding = false;
 			// ⚠ THE ONE CEREMONY NO TAPE CAN DISMISS.
 			//
 			// `Inventory.update` sets `firstUse` as soon as `items.length >=
@@ -1959,6 +2004,7 @@ package
 				// `armed_at` and a pre-`botStart` reading is a FRAME COUNT.
 				arm: { pending: pendingWorld != null, armed_at: armedAtTime },
 				finished: finished,
+				held: holding,
 				error: errorText,
 				tick: tick,
 				tick_count: tickCount,
@@ -2804,6 +2850,8 @@ package
 		/** Disarm and forget the tape and the buffer. */
 		public static function botReset():String
 		{
+			holding = false;
+			holdDeclared = false;
 			loaded = false;
 			armed = false;
 			pendingWorld = null;
@@ -3152,6 +3200,9 @@ package
 				// rather than assuming them, and the seam checker refuses a
 				// signature that fails them.
 				latchSeam(errorText != "", errorText);
+				// ⛓ P4E: hold the room AT the latch, before this frame's
+				// `super.update()` (Main.update reads `holding`).
+				if (holdDeclared) holding = true;
 				// The final observation has been recorded and every hold
 				// released; disarm without consuming another tick.
 				armed = false;
@@ -3386,6 +3437,7 @@ package
 		 */
 		public static function botLoadLevels(json:String):String
 		{
+			holding = false;
 			var chunk:Object;
 			try
 			{
