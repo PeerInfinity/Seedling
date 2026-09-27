@@ -26,8 +26,12 @@ package Pickups
 		private var bloody:Boolean;
 		public var tree:Boolean = false;
 		
-		public function Seed(_x:int, _y:int, _bloody:Boolean = false, _text:String="", _tree:Boolean=false) 
+		/** P4E (C4): the persistence tag the host bound, -1 for vanilla. */
+		private var tag:int = -1;
+		
+		public function Seed(_x:int, _y:int, _bloody:Boolean = false, _text:String="", _tree:Boolean=false, _tag:int=-1) 
 		{
+			tag = _tag;
 			super(_x + Tile.w/2, _y + Tile.h/2, _bloody ? sprSeedBloody : sprSeed, null, false);
 			sprSeed.centerOO();
 			sprSeedBloody.centerOO();
@@ -100,6 +104,9 @@ package Pickups
 		
 		override public function removeSelf():void
 		{
+			// P4E (C4): collection. The check report's choke point
+			// (`Game.pendingCheck`); vanilla seeds carry -1 and write nothing.
+			if (tag >= 0) Game.setPersistence(tag, false);
 			Game.freezeObjects = true;
 			drawCover = true;
 		}

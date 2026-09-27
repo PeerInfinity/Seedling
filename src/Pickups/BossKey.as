@@ -13,9 +13,12 @@ package Pickups
 	{
 		private var keyType:int;
 		private var doActions:Boolean = true;
+		/** P4E (C4): the persistence tag the host bound, -1 for vanilla. */
+		private var tag:int = -1;
 		
-		public function BossKey(_x:int, _y:int, _t:int=0) 
+		public function BossKey(_x:int, _y:int, _t:int=0, _tag:int=-1) 
 		{
+			tag = _tag;
 			super(_x + Tile.w/2, _y + Tile.h/2, Game.bossKeys[_t], null, false);
 			setHitbox(8, 8, 4, 4);
 			keyType = _t;
@@ -61,6 +64,8 @@ package Pickups
 			if (doActions)
 			{
 				Player.hasKeySet(keyType, true);
+				// P4E (C4): the check report's choke point (`Game.pendingCheck`).
+				if (tag >= 0) Game.setPersistence(tag, false);
 			}
 		}
 		

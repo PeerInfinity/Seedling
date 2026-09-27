@@ -1887,6 +1887,18 @@ package
 			return Main.levelPersistence(_l >= 0 ? _l : Main.level, tag);
 		}
 		
+		/**
+		 * P4E (C4): an OPTIONAL `@tag` attribute — -1 ("untagged", the value
+		 * every persistence reader guards on) when the element carries none.
+		 */
+		public static function optionalTag(a:XMLList):int
+		{
+			if (a == null || a.length() == 0) return -1;
+			var s:String = String(a);
+			if (s == "") return -1;
+			return int(s);
+		}
+
 		public static function setPersistence(tag:int, o:Boolean, _l:int=-1):void
 		{
 			Main.levelPersistenceSet(_l >= 0 ? _l : Main.level, tag, o);
@@ -2306,10 +2318,14 @@ package
 				for each (o in xml.objects[0].button) { add(new Button(o.@x, o.@y, o.@tset)); }
 				for each (o in xml.objects[0].buttonroom) { add(new ButtonRoom(o.@x, o.@y, o.@tset, o.@tag, Boolean(int(o.@flip)), o.@room)); }
 				for each (o in xml.objects[0].arrowtrap) { add(new ArrowTrap(o.@x, o.@y, o.@tset, Boolean(int(o.@shoot)))); }
-				for each (o in xml.objects[0].bosskey) { add(new BossKey(o.@x, o.@y, o.@keyType)); }
-				for each (o in xml.objects[0].totempart) { add(new BossTotemPart(o.@x, o.@y, o.@totempart)); }
+				// ⛓ P4E (C4): the three pickups vanilla builds with no tag take
+				// an OPTIONAL `@tag` — the host writes one where a location is
+				// bound to them. Absent reads -1 (`optionalTag`), never 0: an
+				// `int()` of the empty attribute would silently claim slot 0.
+				for each (o in xml.objects[0].bosskey) { add(new BossKey(o.@x, o.@y, o.@keyType, optionalTag(o.@tag))); }
+				for each (o in xml.objects[0].totempart) { add(new BossTotemPart(o.@x, o.@y, o.@totempart, optionalTag(o.@tag))); }
 				for each (o in xml.objects[0].health) { add(new HealthPickup(o.@x, o.@y, o.@tag)); }
-				for each (o in xml.objects[0].seed) { add(new Seed(o.@x, o.@y, false, o.@text, cutscene[2])); }
+				for each (o in xml.objects[0].seed) { add(new Seed(o.@x, o.@y, false, o.@text, cutscene[2], optionalTag(o.@tag))); }
 				for each (o in xml.objects[0].pull) { add(new Pull(o.@x, o.@y, o.@direction, o.@force)); } //o.@direction goes from 0-1
 				for each (o in xml.objects[0].fallrock)  { add(new FallRock(o.@x, o.@y, o.@tset, o.@tag)); }
 				for each (o in xml.objects[0].fallrocklarge)  { add(new FallRockLarge(o.@x, o.@y, o.@tset, o.@tag, Boolean(int(o.@bossrock)), Boolean(int(o.@thirdboss)))); }
