@@ -24,7 +24,9 @@ package Scenery
 		private const moveRadius:int = 5;
 		private const phases:int = 100;
 		private const loops:int = 4;
-		private const randVal:Number = Math.random();
+		// COSMETIC: the float phase only (an Orb has no hitbox; `myLight` is a
+		// Light). `Rng.cos()` IS `Math.random()` unless the tape splits.
+		private const randVal:Number = Rng.cos();
 		private var myLight:Light;
 		
 		public function Orb(_x:int, _y:int, _c:uint=0xFFFFFF) 

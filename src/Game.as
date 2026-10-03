@@ -1981,10 +1981,15 @@ package
 				FP.camera.y = Math.min(Math.max(FP.camera.y, 0), FP.height - FP.screen.height);
 			}
 			
+			// The camera jiggle is COSMETIC: `Rng.cos()`, which IS `Math.random()`
+			// unless the tape declares `rng.split` (so every unsplit tape is
+			// byte-identical). Under the split it leaves the gameplay stream,
+			// where its two draws per shaking frame had been moving every
+			// gameplay draw after the first shake — the Owl's rolls above all.
 			if (shake > 0)
 			{
-				FP.camera.x += shake * Math.random() - shake / 2;
-				FP.camera.y += shake * Math.random() - shake / 2;
+				FP.camera.x += shake * Rng.cos() - shake / 2;
+				FP.camera.y += shake * Rng.cos() - shake / 2;
 				shake = Math.max(shake - 1, 0);
 			}
 			
