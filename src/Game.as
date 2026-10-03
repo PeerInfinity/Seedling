@@ -1941,6 +1941,24 @@ package
 			return n;
 		}
 		
+		/**
+		 * The camera jiggle under `rng.split`: a value in [0, 1) that is a pure
+		 * function of the frame's `Game.time` and the axis (0 = x, 1 = y).
+		 *
+		 * EXACT IN ANY IEEE-754 HOST: `floor(t) * 2531 + axis * 1777` stays an
+		 * integer far below 2^53 for every reachable `Game.time`, `%` on it is
+		 * exact, and the one division rounds the same everywhere. That is the
+		 * whole point — the JS model computes this same expression and gets
+		 * the same bits. 2531 / 4093 is close to the golden ratio, so
+		 * consecutive frames land far apart rather than drifting. 4093 is
+		 * prime.
+		 */
+		public static function shakeJiggle(t:Number, axis:int):Number
+		{
+			var k:Number = Math.floor(t) * 2531 + axis * 1777;
+			return (k % 4093) / 4093;
+		}
+
 		public static function worldFrame(n:int, loops:Number=1):int //n is the number of values to return (1..n) and loops is the number of animation loops to go over.
 		{
 			return int((time % (timePerFrame * loops)) / (timePerFrame * loops / Math.max(n, 1)));
@@ -1981,15 +1999,15 @@ package
 				FP.camera.y = Math.min(Math.max(FP.camera.y, 0), FP.height - FP.screen.height);
 			}
 			
-			// The camera jiggle is COSMETIC: `Rng.cos()`, which IS `Math.random()`
-			// unless the tape declares `rng.split` (so every unsplit tape is
-			// byte-identical). Under the split it leaves the gameplay stream,
-			// where its two draws per shaking frame had been moving every
-			// gameplay draw after the first shake — the Owl's rolls above all.
+			// The camera jiggle is COSMETIC. Unsplit it is `Rng.cos()`, which IS
+			// `Math.random()` there, so every unsplit tape is byte-identical.
+			// Under `rng.split` it takes NO draw at all: `shakeJiggle` is a pure
+			// function of `Game.time`, so the model can state the camera on
+			// every shaking frame (the shake band collapses to exact).
 			if (shake > 0)
 			{
-				FP.camera.x += shake * Rng.cos() - shake / 2;
-				FP.camera.y += shake * Rng.cos() - shake / 2;
+				FP.camera.x += shake * (Rng.split ? shakeJiggle(Game.time, 0) : Rng.cos()) - shake / 2;
+				FP.camera.y += shake * (Rng.split ? shakeJiggle(Game.time, 1) : Rng.cos()) - shake / 2;
 				shake = Math.max(shake - 1, 0);
 			}
 			
