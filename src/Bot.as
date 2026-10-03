@@ -297,6 +297,22 @@ package
 		private static var holdDeclared:Boolean = false;
 		public static var holding:Boolean = false;
 
+		// ── botHold (seedling-wasm-leak L4 item 4a, ⚖ user 2026-10-03) ──────
+		//
+		// FREEZE NOW, mid-tape, for host-side replanning (an item delivered
+		// mid-room). Unlike `holding` (a latch the TAPE declares, between
+		// windows), `frozen` is set by the HOST at any frame boundary and the
+		// release must resume as if the freeze never happened. So a frozen
+		// frame runs NOTHING that moves state: `Bot.update` returns before the
+		// sound-clock pin, the tape tick and every dispatch; `Main.update`
+		// skips the world step and the mixer; `Main.render` skips the render,
+		// whose `cover()` decays `blackCover` (unpinned) and which carries
+		// render-side logic and draws. Held keys stay held: FlashPunk's
+		// `Input.update()` (still run by `Engine`) clears only the edge queues.
+		// Released by `botHold("off")`, `botStart`, `botReset`, `botLoadLevels`.
+		// ⛔ Byte-inert for everything that never calls `botHold`.
+		public static var frozen:Boolean = false;
+
 		// The boot block, honored from R0 on (see `botStart`).
 		private static var bootX:int = 80;
 		private static var bootY:int = 128;
@@ -762,6 +778,7 @@ package
 				ExternalInterface.addCallback("botStatus", botStatus);
 				ExternalInterface.addCallback("botDrain", botDrain);
 				ExternalInterface.addCallback("botReset", botReset);
+				ExternalInterface.addCallback("botHold", botHold);
 				// ⚠ ITS OWN CALLBACK, not a field on `botStatus` — see
 				// `botMobiles`. Every existing caller polls `botStatus` and
 				// is therefore byte-inert past this batch by construction.
@@ -1621,6 +1638,7 @@ package
 			if (armed) return "error:already running";
 			// P4E: the next window starts from exactly the held room.
 			holding = false;
+			frozen = false;
 			// ⚠ THE ONE CEREMONY NO TAPE CAN DISMISS.
 			//
 			// `Inventory.update` sets `firstUse` as soon as `items.length >=
@@ -2005,6 +2023,7 @@ package
 				arm: { pending: pendingWorld != null, armed_at: armedAtTime },
 				finished: finished,
 				held: holding,
+				frozen: frozen,
 				error: errorText,
 				tick: tick,
 				tick_count: tickCount,
@@ -2847,10 +2866,23 @@ package
 			return "error:unreachable";
 		}
 
+		/**
+		 * 4a: freeze the game NOW (`"on"`) or resume it (`"off"`). Legal at any
+		 * frame boundary, armed or not; the tape keeps its tick and its held
+		 * keys. Idempotent.
+		 */
+		public static function botHold(arg:String):String
+		{
+			if (arg == "on") { frozen = true; return "ok"; }
+			if (arg == "off") { frozen = false; return "ok"; }
+			return "error:botHold takes \"on\" or \"off\", got " + arg;
+		}
+
 		/** Disarm and forget the tape and the buffer. */
 		public static function botReset():String
 		{
 			holding = false;
+			frozen = false;
 			holdDeclared = false;
 			loaded = false;
 			armed = false;
@@ -2963,6 +2995,10 @@ package
 		public static function update():void
 		{
 			init();
+			// 4a: a host freeze stops EVERYTHING this function does — above
+			// the sound-clock pin too, because the release must resume on the
+			// exact mixer position the freeze found (see `frozen`).
+			if (frozen) return;
 			// ⚠ ABOVE the armed check, and on EVERY frame including dead and
 			// frozen ones. The thing being pinned is a mixer, and a mixer
 			// does not stop because the tape is between windows or because
@@ -3438,6 +3474,7 @@ package
 		public static function botLoadLevels(json:String):String
 		{
 			holding = false;
+			frozen = false;
 			var chunk:Object;
 			try
 			{

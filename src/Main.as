@@ -58,6 +58,18 @@ package
 			//}
 		}
 		
+		/**
+		 * 4a: a host freeze (`Bot.frozen`) skips the render as well — `cover()`
+		 * decays `blackCover` per render and the render pass carries logic and
+		 * draws, so rendering a frozen frame would move state. The screen keeps
+		 * showing the last frame drawn.
+		 */
+		override public function render():void
+		{
+			if (Bot.frozen) return;
+			super.render();
+		}
+
 		override public function update():void
 		{
 			// BOT: drive the tape before entities update. This must stay
@@ -68,7 +80,7 @@ package
 			// ⛓ P4E (⚖ 72 (a′)): a tape that declared `hold` and has LATCHED
 			// holds the room — no body steps, `Game.time` does not advance,
 			// the mixer does not move — until the next `botStart`.
-			if (!Bot.holding)
+			if (!Bot.holding && !Bot.frozen)
 			{
 				super.update();
 				Music.update();
