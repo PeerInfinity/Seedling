@@ -2138,6 +2138,11 @@ package
 				// but the readout is what proves that rather than assuming
 				// it.
 				game_time: Game.time,
+				// 3′c's witness (⚖ user 2026-10-03): the camera as `view()` left
+				// it (after the shake jiggle and the round), and the live `shake`
+				// the next `view()` will read. Between frames nothing else writes
+				// `FP.camera`, so a poll reads the last frame's own value.
+				camera: { x: FP.camera.x, y: FP.camera.y, shake: Game.shake },
 				// The pinned mixer's own numbers for the ONE set with a
 				// gameplay reader. `len_frames` 0 on a set that has played
 				// means `Sfx.length` did not answer — see `Music.pinPlayed`,
