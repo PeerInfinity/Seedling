@@ -589,6 +589,29 @@ package
 		 */
 		private static var beginEntry:Object = null;
 
+		// ── sinceBegin (seedling-wasm-leak L4 item 4c, ⚖ user 2026-10-03) ──
+		//
+		// What has happened in THIS world since its `latchBeginEntry`, for a
+		// host adopting a room it did not start (cold start). `beginEntry`
+		// says where the world began; these say how far it has gone, which
+		// the existing readouts cannot (the player's `direction` is private,
+		// and `recordEdges` only runs on an armed tape).
+		// RESET in `latchBeginEntry`; stepped by `sinceBeginStep()`, which
+		// `Main.update` calls once per frame AFTER `Bot.update()` — so a
+		// frame's edges are seen whoever dispatched them (a human, the tape's
+		// own `dispatchKey`, `autoAdvance`) and before `Engine` clears them —
+		// and only on a frame the world will step for: not while `holding`,
+		// not while `frozen`, not while a `botStart` swap is pending. The
+		// pending frames precede the new world's own `latchBeginEntry`, so
+		// they fall in neither `stepped` nor `dead` either way.
+		private static var sbStepped:int = 0;       // blackCover <= 0 && !Game.freezeObjects
+		private static var sbDead:int = 0;          // the complement (fade, freeze)
+		private static var sbInputFrames:int = 0;   // any KEY_NAMES key checked/pressed/released
+		private static var sbPressed:Object = {};   // name -> Input.pressed count
+		private static var sbHeldAtBegin:Array = []; // Input.check names at the latch
+		private static var sbRngFirst:Number = -1;  // Rng.state on the first step after the latch
+		private static var sbAwaitRng:Boolean = false;
+
 		/**
 		 * ── R7: THE `pressed`/`released` ECHO (R6 debt 4) ────────────────
 		 *
@@ -2347,6 +2370,53 @@ package
 			o["fp.seed"] = FP.randomSeedLive;
 			o["save.time"] = Main.time;
 			beginEntry = o;
+			// 4c: a new world, a new count.
+			sbStepped = 0;
+			sbDead = 0;
+			sbInputFrames = 0;
+			sbPressed = {};
+			sbHeldAtBegin = [];
+			for (var i:int = 0; i < KEY_NAMES.length; i++)
+			{
+				var name:String = String(KEY_NAMES[i]);
+				if (Input.check(keyCodeFor(name))) sbHeldAtBegin.push(name);
+			}
+			sbAwaitRng = true;
+			sbRngFirst = -1;
+		}
+
+		/**
+		 * 4c: one frame of the since-begin record. Called by `Main.update`
+		 * after `Bot.update()`, only on a frame the world steps for.
+		 */
+		public static function sinceBeginStep():void
+		{
+			if (pendingWorld != null) return;
+			var game:Game = FP.world as Game;
+			if (game == null) return;
+			// The post-build stream: the build's own draws are already taken
+			// by the time the first frame after `latchBeginEntry` runs.
+			if (sbAwaitRng)
+			{
+				sbRngFirst = Rng.state;
+				sbAwaitRng = false;
+			}
+			// The dead-frame gate's own predicate (`update()`), inverted.
+			if (game.blackCover <= 0 && !Game.freezeObjects) sbStepped++;
+			else sbDead++;
+			var any:Boolean = false;
+			for (var i:int = 0; i < KEY_NAMES.length; i++)
+			{
+				var name:String = String(KEY_NAMES[i]);
+				var code:int = keyCodeFor(name);
+				if (Input.pressed(code))
+				{
+					sbPressed[name] = (sbPressed[name] == undefined ? 0 : int(sbPressed[name])) + 1;
+					any = true;
+				}
+				else if (Input.check(code) || Input.released(code)) any = true;
+			}
+			if (any) sbInputFrames++;
 		}
 
 		/**
@@ -2391,7 +2461,16 @@ package
 				partial: latchPartial,
 				why: latchWhy,
 				seam: latched,
-				beginEntry: beginEntry
+				beginEntry: beginEntry,
+				// 4c: how far this world has gone since `beginEntry`.
+				sinceBegin: {
+					stepped: sbStepped,
+					dead: sbDead,
+					input_frames: sbInputFrames,
+					pressed: sbPressed,
+					held_at_begin: sbHeldAtBegin,
+					rng_first: sbRngFirst
+				}
 			});
 		}
 

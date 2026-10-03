@@ -82,6 +82,8 @@ package
 			// the mixer does not move — until the next `botStart`.
 			if (!Bot.holding && !Bot.frozen)
 			{
+				// 4c: count this frame, edges and all, before the world steps.
+				Bot.sinceBeginStep();
 				super.update();
 				Music.update();
 			}
