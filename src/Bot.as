@@ -2996,14 +2996,17 @@ package
 			Music.pinReset();
 			// ⚠ FORGOTTEN, NOT UNDONE — the `saveTotemParts` rule below,
 			// applied to the stream. The declaration is dropped and
-			// `Rng.split` goes back off (a static outliving the tape is the
-			// order dependence the v7 block exists to remove), but the
-			// generator's STATE is left exactly where the tape left it: a
-			// reset is a rewind the game itself can never do, and the next
-			// tape's own `rng.seed` is what decides where it starts.
+			// `Rng.split` goes back to the GAME'S DEFAULT (a static outliving
+			// the tape is the order dependence the v7 block exists to
+			// remove), but the generator's STATE is left exactly where the
+			// tape left it: a reset is a rewind the game itself can never do,
+			// and the next tape's own `rng.seed` is what decides where it
+			// starts. ⛓ 3′b (⚖ user 2026-10-04): that default is now TRUE —
+			// tapeless play keeps every cosmetic draw off the gameplay stream.
+			// Every tape still sets its own split at `botStart`.
 			rngSeed = 0;
 			rngSplit = false;
-			Rng.split = false;
+			Rng.split = true;
 			// ⚠ R7: FORGOTTEN, NOT UNDONE — the `rngSeed` rule, applied to
 			// the other two streams and to the seam. The DECLARATIONS are
 			// dropped so the next tape's boot is a pure function of the next

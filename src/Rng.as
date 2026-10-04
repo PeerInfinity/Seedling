@@ -30,13 +30,17 @@ package
 	 * call sites whose value nothing gameplay-visible reads call `Rng.cos()`
 	 * instead of `Math.random()`.
 	 *
-	 * ⚠ **AND IT IS OFF BY DEFAULT, WHICH IS WHAT MAKES IT BYTE-INERT.**
-	 * With `split` false, `cos()` IS `Math.random()` — the same call, in the
-	 * same order, drawing from the same generator — so every tape recorded
-	 * before this batch takes a byte-identical path through it. The routing
-	 * only becomes real when a tape declares `rng.split`, which is the same
-	 * shape `botStart`'s persistence and save resets already use: a feature
-	 * that cannot change a run that did not ask for it.
+	 * ⛓ **ON BY DEFAULT since 3′b (seedling-wasm-leak L4, ⚖ user re-ruling
+	 * 2026-10-04); it was off before.** With `split` false, `cos()` IS
+	 * `Math.random()` — the same call, in the same order, drawing from the
+	 * same generator. Every TAPE still sets the flag from its own declaration
+	 * at `botStart` (`tape_version` < 7 means false by definition), so no
+	 * tape's own window changes. What the default reaches is play with no
+	 * tape armed — the page's boot world, the title, the standalone game, the
+	 * frames after `botReset` — where every cosmetic draw now stays off the
+	 * gameplay stream. ⚠ The one thing it moves for an UNSEEDED tape is where
+	 * the stream it INHERITS from the page starts (the boot world's tile
+	 * draws no longer advance it); see the L4 record for the bounded re-run.
 	 *
 	 * ⛔ CLASSIFYING IS THE RISKY HALF, AND ONE SITE ALREADY MOVED. The
 	 * blade positions in `Tile.addGrass()` look like decoration and are NOT:
@@ -59,8 +63,9 @@ package
 		private static var hooks:* = null;
 		private static var probed:Boolean = false;
 
-		/** Are the cosmetic draws on their own stream? Written by `Bot`. */
-		public static var split:Boolean = false;
+		/** Are the cosmetic draws on their own stream? Written by `Bot`;
+		 *  true when no tape says otherwise (3′b). */
+		public static var split:Boolean = true;
 
 		private static function resolve():void
 		{
@@ -91,13 +96,17 @@ package
 		 * A COSMETIC draw: `Math.random()` unless the split is on.
 		 *
 		 * ⚠ The `!split` arm must stay first and must stay a plain
-		 * `Math.random()` — it is the byte-inertness of every committed
-		 * fixture, and a `resolve()` on this path would make the default
-		 * case depend on a runtime lookup it does not need.
+		 * `Math.random()` — it is the byte-inertness of every tape that
+		 * declares no split. Under the split the hooks are resolved here
+		 * (the default is now on, so this can be the page's first draw), and
+		 * a build without them (Flash, Ruffle) falls back to `Math.random()`
+		 * rather than throwing.
 		 */
 		public static function cos():Number
 		{
 			if (!split) return Math.random();
+			resolve();
+			if (hooks == null) return Math.random();
 			return Number(hooks.cosmetic());
 		}
 
