@@ -284,7 +284,11 @@ package Enemies
 					p.y = y - originY + height;
 				}
 			}
-			if (FP.world.classCount(Wand) <= 0 && !activated)
+			// R4: the fight also waits for all five totem parts, as in
+			// madisonsilver's client. In vanilla the Wand itself waits for them
+			// (`Wand.update`), but an `APItem` in its place does not, so without
+			// this the fight would start on entry.
+			if (FP.world.classCount(Wand) <= 0 && !activated && Player.hasAllTotemParts())
 			{
 				activated = true;
 				Music.playSound("Other", 0);
