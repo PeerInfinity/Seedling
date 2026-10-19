@@ -45,10 +45,12 @@ package NPCs
 		
 		override public function doneTalking():void
 		{
-			if (Main.hasWand && !Main.hasDarkSword)
+			// R4: the dark sword is a location. It is offered while its slot holds,
+			// whether or not the sword itself already came from the server.
+			if (Main.hasWand && Game.checkPersistence(DarkSword.WITCH_TAG))
 			{
 				var p:Player = FP.world.nearestToPoint("Player", x, y) as Player;
-				FP.world.add(new DarkSword(p.x - Tile.w/2, p.y - Tile.h/2));
+				FP.world.add(new DarkSword(p.x - Tile.w/2, p.y - Tile.h/2, DarkSword.WITCH_TAG));
 			}
 		}
 		

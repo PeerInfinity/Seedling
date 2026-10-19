@@ -14,6 +14,13 @@ package Pickups
 		[Embed(source = "../../assets/graphics/SwordDark.png")] private var imgDarkSword:Class;
 		private var sprDarkSword:Spritemap = new Spritemap(imgDarkSword, 16, 16);
 		
+		/**
+		 * R4: the slot the Witch's sword carries in L12 (the `Dark Sword`
+		 * location). Collecting it clears the slot, which is the report; the
+		 * HOST grants the item, as for `APItem`.
+		 */
+		public static const WITCH_TAG:int = 1;
+
 		private var tag:int;
 		private var doActions:Boolean = true;
 		
@@ -43,7 +50,6 @@ package Pickups
 		{
 			if (doActions)
 			{
-				Player.hasDarkSword = true;
 				if (Game.checkPersistence(tag))
 				{
 					Game.setPersistence(tag, false);
