@@ -13,6 +13,13 @@ package Pickups
 		[Embed(source = "../../assets/graphics/FirePickup.png")] private var imgFire:Class;
 		private var sprFire:Spritemap = new Spritemap(imgFire, 16, 16);
 		
+		/**
+		 * R4: the slot the Bob Boss drop carries in L32 (the `Fire` location).
+		 * Collecting it clears the slot, which is the report; the HOST grants
+		 * the item, as for `APItem`. A cleared slot hides the drop (`check`).
+		 */
+		public static const BOSS_DROP_TAG:int = 4;
+
 		private var tag:int;
 		private var doActions:Boolean = true;
 		
@@ -43,7 +50,6 @@ package Pickups
 		{
 			if (doActions)
 			{
-				Player.hasFire = true;
 				Game.setPersistence(tag, false);
 			}
 		}

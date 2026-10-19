@@ -1,6 +1,7 @@
 package Scenery 
 {
 	import Enemies.BobBoss;
+	import Pickups.Fire;
 	import flash.geom.Point;
 	import net.flashpunk.Entity;
 	import net.flashpunk.graphics.Image;
@@ -112,10 +113,16 @@ package Scenery
 					{
 						if (cameraTimer == 0)
 						{
-							if (bossRock && thirdBoss)
+							// R4: the boss only until he is killed; after that, his
+							// Fire drop until it is collected.
+							if (bossRock && thirdBoss && Game.checkPersistence(BobBoss.KILLED_TAG))
 							{
 								FP.world.add(new BobBoss(72, 72)); //Create the third dungeon boss when this falls.
 								(FP.world as Game).playerPosition = new Point(72, 104);
+							}
+							else if (bossRock && thirdBoss && Game.checkPersistence(Fire.BOSS_DROP_TAG))
+							{
+								FP.world.add(new Fire(FP.width / 2 - Tile.w / 2, FP.height / 2 - Tile.h / 2, Fire.BOSS_DROP_TAG));
 							}
 							Game.freezeObjects = false;
 							Game.resetCamera();

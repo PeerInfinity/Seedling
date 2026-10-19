@@ -22,6 +22,14 @@ package Enemies
 		[Embed(source = "../../assets/graphics/BobBossWeapons.png")] private var imgBobBossWeapons:Class;
 		private var sprBobBossWeapons:Spritemap = new Spritemap(imgBobBossWeapons, 24, 5);
 		
+		/**
+		 * R4: the persistence slot the kill clears in the boss room (L32). It is
+		 * the `Times` location's report, and `FallRockLarge` spawns the boss only
+		 * while it holds. There is no `Player.hasFire` guard: the fight happens
+		 * even when Fire already came from the server.
+		 */
+		public static const KILLED_TAG:int = 3;
+
 		private var bossType:int;
 		
 		private const nextBossTimerMax:int = 120;
@@ -36,11 +44,6 @@ package Enemies
 		{
 			//Tile offsets are multiplied by the BobSoldier constructor
 			super(_x, _y, new Spritemap(images[_st], 20, 20, endAnim));
-			if (Player.hasFire)
-			{
-				FP.world.remove(this);
-				return;
-			}
 			
 			Game.levelMusics[(FP.world as Game).level] = Game.bossMusic;
 			
@@ -94,11 +97,6 @@ package Enemies
 		
 		override public function update():void
 		{
-			if (Player.hasFire)
-			{
-				FP.world.remove(this);
-				return;
-			}
 			if (Game.freezeObjects)
 				return;
 			if (formingTimer > 0)
@@ -118,8 +116,6 @@ package Enemies
 		
 		override public function render():void
 		{
-			if (Player.hasFire)
-				return;
 			super.render();
 		}
 		
@@ -191,7 +187,11 @@ package Enemies
 					}
 					else
 					{
-						FP.world.add(new Fire(FP.width / 2 - Tile.w / 2, FP.height / 2 - Tile.h / 2, -1));
+						// R4: the kill is a location (`Times`). Clearing KILLED_TAG is the
+						// report (`Game.pendingCheck`), and it keeps the boss dead.
+						Game.setPersistence(KILLED_TAG, false);
+						if (Game.checkPersistence(Fire.BOSS_DROP_TAG))
+							FP.world.add(new Fire(FP.width / 2 - Tile.w / 2, FP.height / 2 - Tile.h / 2, Fire.BOSS_DROP_TAG));
 						Game.levelMusics[(FP.world as Game).level] = -1;
 						Main.unlockMedal(Main.badges[5]);
 					}
